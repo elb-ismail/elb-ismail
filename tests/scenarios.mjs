@@ -292,7 +292,10 @@ await scenario('audio: heard voices raise suspicion; captions match speech and s
   await pg.waitForTimeout(2500);
   const r = await pg.evaluate(() => ({ sus: MS.audioStats().layers.suspicion, caps: MS.captions }));
   assert(r.sus > 0.2, 'suspicion layer rises near a heard, unresolved voice: ' + r.sus);
-  assert(r.caps.some(c => c.startsWith('speech: Voice')), 'speech caption with direction: ' + r.caps.join(' | '));
+  assert(!r.caps.some(c => c.startsWith('speech:')), 'an on-screen speaker is captioned by its bubble, not twice');
+  await pg.evaluate(() => { const s = MS.G.signals[0]; MS.emit('voice', { s: { ...s, x: s.x + 5000 }, dx: 5000, dy: 0 }); });
+  const caps2 = await pg.evaluate(() => MS.captions);
+  assert(caps2.some(c => /speech: Voice to the east, calling itself/.test(c)), 'an off-screen speaker gets a caption with direction: ' + caps2.join(' | '));
   // environmental caption for a doorway shifting nearby
   await pg.evaluate(() => MS.emit('doorChanged', { k: 0, near: true, dx: 200, dy: 0 }));
   assert((await pg.evaluate(() => MS.captions)).some(c => /Stone shifting to the east/.test(c)), 'sound caption names the cue and its direction');
@@ -317,6 +320,34 @@ await scenario('accessibility: reduced motion follows the system; contrast, rebi
   await pg.keyboard.press('g'); await pg.waitForTimeout(300);
   assert(await pg.evaluate(() => MS.G.p.flares) === f0 - 1, 'rebound key throws a flare');
 }, { reducedMotion: 'reduce' });
+
+await scenario('touch: phone layout, on-screen controls work, nothing overlaps the lens bar', async pg => {
+  await pg.tap('#btnBegin'); await pg.tap('.rnode.avail'); await pg.tap('#goBtn');
+  await pg.waitForFunction(() => MS.state === 'zone');
+  await pg.waitForTimeout(400);
+  const ui = await pg.evaluate(() => ({ mode: document.getElementById('touchUi').hidden, sizes: [...document.querySelectorAll('.tbtn')].map(b => { const r = b.getBoundingClientRect(); return [b.id, Math.round(r.width), Math.round(r.top), Math.round(r.bottom)]; }), lensTop: innerHeight - 14 - 34 }));
+  assert(ui.mode === false, 'touch controls shown');
+  for (const [id, w, top, bottom] of ui.sizes) { assert(w >= 44, id + ' is a large enough target'); assert(bottom < ui.lensTop - 4, id + ' does not cover the lens bar'); }
+  await pg.waitForFunction(() => document.getElementById('guide').textContent.trim().length > 0, null, { timeout: 4000 });
+  const clash = await pg.evaluate(() => { const a = document.getElementById('tPause').getBoundingClientRect(), b = document.getElementById('guide').getBoundingClientRect(); return !(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top); });
+  assert(!clash, 'pause button is not covered by the guide card');
+  assert(await pg.evaluate(() => /Drag/.test(document.getElementById('guide').textContent)), 'guide speaks in touch terms');
+  const f0 = await pg.evaluate(() => MS.G.p.flares);
+  await pg.tap('#tFlare'); await pg.waitForTimeout(300);
+  assert(await pg.evaluate(() => MS.G.p.flares) === f0 - 1, 'FLARE button throws a flare');
+  await pg.tap('#tLens'); await pg.waitForTimeout(100);
+  assert(await pg.evaluate(() => MS.G.p.lens) === 1, 'LENS button cycles lenses');
+  // drag on the left half to move
+  const p0 = await pg.evaluate(() => [MS.G.p.x, MS.G.p.y]);
+  const cdp = await pg.context().newCDPSession(pg);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 90, y: 600 }] });
+  for (let i = 1; i <= 10; i++) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 90, y: 600 - i * 5 }] }); await pg.waitForTimeout(40); }
+  await pg.waitForTimeout(400);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  const p1 = await pg.evaluate(() => [MS.G.p.x, MS.G.p.y]);
+  assert(Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) > 20, 'left-side drag moves the Warden');
+  await pg.shot('D-touch-zone');
+}, { viewport: { width: 390, height: 844 }, touch: true });
 
 const fixture = JSON.parse(readFileSync(path.join(here, 'fixtures', 'pre-upgrade-v1.json'), 'utf8'));
 const fixtureStore = { 'moving-sanctuary.chronicle.v1': JSON.stringify(fixture.chronicle), 'moving-sanctuary.settings.v1': JSON.stringify(fixture.settings) };

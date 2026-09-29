@@ -20,6 +20,7 @@ async function tour(tag, viewport, touch) {
   await pg.goto(URL_BASE + '?debug=1');
   await pg.waitForFunction(() => window.MS && MS.state === 'title');
   await pg.evaluate(f => { MS.seed(21); if (f.includes('contrast')) { MS.S.contrast = true; document.documentElement.classList.add('hc'); } }, flags);
+  if (touch) pg.click = (sel, o) => pg.tap(sel, o); // phones tap, so the game stays in touch mode
   const shot = n => pg.screenshot({ path: path.join(OUT, `${tag}-${n}.png`) });
   await pg.waitForTimeout(400); await shot('01-title');
   await pg.click('#btnBegin'); await pg.waitForTimeout(250); await shot('02-route');

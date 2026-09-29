@@ -128,6 +128,7 @@ blockquote { margin: 0; padding: 2px 0 2px 16px; border-left: 2px solid var(--la
 .crew span { font-size: 12px; padding: 5px 9px; border-radius: 999px; background: var(--night-3); border: 1px solid var(--rule); }
 .crew span i { font-style: normal; color: var(--muted); }
 @media (max-width: 860px) { .route-wrap { grid-template-columns: 1fr; } .route-map { aspect-ratio: 4 / 3; } }
+@media (max-width: 560px) { .rnode:not(.avail):not(.here):not(.sel):not(.first):not(.last) .lbl { display: none; } .rnode { font-size: 12px; } }
 
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
 .buy { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
@@ -180,12 +181,47 @@ html.rm *, html.rm *::before { transition: none !important; animation: none !imp
 
 #touchUi { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
 .tbtn { position: absolute; pointer-events: auto; width: 62px; height: 62px; border-radius: 50%; font: 600 11px/1 var(--mono); letter-spacing: 0.05em; color: var(--parch); background: rgba(17, 23, 40, 0.62); border: 1.5px solid rgba(255, 196, 107, 0.55); touch-action: none; }
-#tUse { right: 20px; bottom: calc(118px + env(safe-area-inset-bottom, 0px)); width: 76px; height: 76px; border-color: var(--lamp); }
-#tFlare { right: 104px; bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
-#tBeacon { right: 28px; bottom: calc(206px + env(safe-area-inset-bottom, 0px)); }
-#tLens { right: 108px; bottom: calc(222px + env(safe-area-inset-bottom, 0px)); border-color: rgba(111, 227, 210, 0.6); }
-#tPause { width: 44px; height: 44px; border-radius: 8px; left: 16px; top: calc(176px + env(safe-area-inset-top, 0px)); }
+#tUse { right: 12px; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); width: 62px; height: 62px; }
+#tFlare { right: 80px; bottom: calc(80px + env(safe-area-inset-bottom, 0px)); width: 50px; height: 50px; }
+#tBeacon { right: 12px; bottom: calc(148px + env(safe-area-inset-bottom, 0px)); width: 50px; height: 50px; }
+#tLens { right: 68px; bottom: calc(136px + env(safe-area-inset-bottom, 0px)); width: 46px; height: 46px; border-color: rgba(111, 227, 210, 0.6); }
+.tbtn { font-size: 10px; background: rgba(12, 16, 28, 0.55); }
+#tPause { width: 44px; height: 44px; border-radius: 8px; right: 16px; top: calc(106px + env(safe-area-inset-top, 0px)); }
 
+/* ---- one interface language: smoked glass framed in etched brass, chart paper for the route ---- */
+:root { --brass: #b39a5e; --brass-dim: rgba(179, 154, 94, 0.45); --ink: #d9ccaa; --paper: #1c1912; }
+.card-surface { position: relative; background: linear-gradient(180deg, rgba(20, 26, 40, 0.94), rgba(12, 16, 28, 0.96)); border: 1px solid var(--brass-dim); border-radius: 4px; box-shadow: inset 0 1px 0 rgba(255, 236, 200, 0.06), 0 12px 30px -18px rgba(0, 0, 0, 0.8); }
+.card-surface::before, .card-surface::after { content: ""; position: absolute; width: 10px; height: 10px; border-color: var(--brass); border-style: solid; pointer-events: none; }
+.card-surface::before { top: 4px; left: 4px; border-width: 1px 0 0 1px; }
+.card-surface::after { bottom: 4px; right: 4px; border-width: 0 1px 1px 0; }
+.btn { border-radius: 3px; background: linear-gradient(180deg, #ffd08a, #e9ad55); box-shadow: inset 0 -2px 0 rgba(90, 60, 20, 0.45), 0 0 0 1px rgba(120, 84, 30, 0.6); }
+.btn.ghost { background: rgba(16, 21, 36, 0.9); box-shadow: inset 0 0 0 1px var(--brass-dim); }
+.btn.ghost:hover { box-shadow: inset 0 0 0 1px var(--brass); }
+.btn:active { transform: translateY(1px); }
+.list li { background: rgba(14, 19, 32, 0.92); border-color: rgba(179, 154, 94, 0.22); }
+.eyebrow { color: var(--brass); }
+h2 { letter-spacing: -0.005em; }
+.route-map { border: 1px solid var(--brass-dim); border-radius: 3px; background:
+  radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.55)),
+  repeating-linear-gradient(0deg, rgba(217, 204, 170, 0.05) 0 1px, transparent 1px 32px),
+  repeating-linear-gradient(90deg, rgba(217, 204, 170, 0.05) 0 1px, transparent 1px 32px),
+  linear-gradient(160deg, #221e16, #16130e); }
+.route-map::after { content: "N"; position: absolute; top: 10px; right: 14px; font: 600 12px/1 var(--display); color: var(--ink); opacity: 0.6; border-bottom: 1px solid var(--ink); padding-bottom: 2px; }
+.route-map line { stroke: rgba(217, 204, 170, 0.22); stroke-width: 1.2; }
+.route-map line.walked { stroke: #e3b364; stroke-width: 2.6; }
+.route-map line.avail { stroke: rgba(227, 179, 100, 0.8); stroke-dasharray: 6 5; }
+.rnode { color: rgba(217, 204, 170, 0.75); font-family: var(--display); font-size: 13px; }
+.rnode .dot { width: 12px; height: 12px; background: #1c1912; border: 1.5px solid rgba(217, 204, 170, 0.5); }
+.rnode.here .dot { width: 18px; height: 18px; background: radial-gradient(circle at 40% 35%, #d1584a, #8a2a22); border: 0; box-shadow: 0 0 0 3px rgba(138, 42, 34, 0.35), 0 2px 4px rgba(0, 0, 0, 0.6); }
+.rnode.avail .dot { width: 14px; height: 14px; background: radial-gradient(circle at 40% 35%, #f3d8a0, #a8823c); border: 0; box-shadow: 0 0 0 5px rgba(227, 179, 100, 0.16); }
+.rnode.sel .dot { box-shadow: 0 0 0 4px #e3b364, 0 0 14px #e3b364; }
+.rnode.sel .lbl, .rnode.here .lbl { color: #f0e2bf; }
+.rnode .lbl i { color: #e3b364; }
+.guide { border-radius: 3px; border-color: var(--brass-dim); background: linear-gradient(180deg, rgba(20, 26, 40, 0.95), rgba(10, 14, 24, 0.95)); }
+.guide b { color: var(--brass); }
+#dockPanel { width: min(1040px, 100%); }
+.tbtn { width: 64px; height: 64px; background: rgba(12, 16, 28, 0.7); border: 1.5px solid var(--brass-dim); }
+#tUse { border-color: var(--brass); }
 @media (prefers-reduced-motion: reduce) { .btn { transition: none; } }
 </style>
 </head>
@@ -1068,7 +1104,7 @@ function updSignals(dt) {
     if (d < 250 && G.t - s.heardT > 10) {
       s.heardT = G.t; s.heard = true; if (!s.heardPos) s.heardPos = { x: s.x, y: s.y };
       s.say = s.line + (!s.real && S.tells === 'clear' ? ' (the words fold back on themselves)' : ''); s.sayT = 5.5;
-      if (!G.heardIds.has(s.id)) { G.heardIds.add(s.id); log(`A voice: "${s.line}"`, 'echo'); }
+      if (!G.heardIds.has(s.id)) G.heardIds.add(s.id);
       emit('voice', { s, dx: s.x - P.x, dy: s.y - P.y });
     }
     s.sayT = Math.max(0, s.sayT - dt);
@@ -2282,7 +2318,7 @@ function renderBackdrop(t) {
   ctx.globalAlpha = 0.9; ctx.drawImage(SKY, -((drift) % 1600), gy - 330, 1600, 400); ctx.drawImage(SKY, 1600 - (drift % 1600), gy - 330, 1600, 400); ctx.globalAlpha = 1;
   ctx.fillStyle = '#060a11'; ctx.fillRect(0, gy, W, H - gy);
   ctx.fillStyle = 'rgba(111,160,170,0.06)'; for (let k = 0; k < 6; k++) ctx.fillRect(0, gy + 8 + k * 9, W, 1);   // still water
-  const x = (((t * (S.motion ? 0.016 : 0.004)) % 1.3) - 0.15) * W;
+  const x = (((t * (S.motion ? 0.016 : 0.004) + 0.5) % 1.3) - 0.15) * W;
   ctx.globalAlpha = 0.9; ctx.drawImage(SPR.sanct, x - 300, gy - 340, 600, 600); ctx.globalAlpha = 1;
   drawWalker(x, gy - 50, clamp(W / 900, 0.55, 1) * 0.9, S.motion ? t : 0);
   ctx.fillStyle = 'rgba(255,196,107,0.14)'; ctx.fillRect(x - 40, gy + 6, 80, 2);   // its reflection
@@ -2659,7 +2695,12 @@ on((type, d) => {
     case 'carried': [62, 65, 69].forEach((m, k) => tone(mt(m), 1.6, { type: 'triangle', vol: 0.05, attack: 0.3, rev: 0.6, at: now + 0.3 + k * 0.25 })); caption(`${d.crew.name} carries you home`, 'env'); break;
     case 'packDrop': tone(90, 0.35, { vol: 0.14, slide: 55 }); for (let k = 0; k < 4; k++) tone(rand(1800, 2600), 0.12, { vol: 0.02, at: now + 0.1 + k * 0.05 }); caption('Your pack fell', 'env'); break;
     case 'packRecovered': case 'bank': [60, 64, 67].forEach((m, k) => tone(mt(m + 12), 0.6, { type: 'triangle', vol: 0.05, at: now + k * 0.07, bus: AU.bus.ui })); break;
-    case 'voice': murmur(d.s, clamp(d.dx / 300, -1, 1)); duck(0.4, 2.2); caption(`Voice ${dirWord(d.dx, d.dy)}, calling itself ${d.s.name}: "${d.s.line}"`, 'speech'); break;
+    case 'voice': {
+      murmur(d.s, clamp(d.dx / 300, -1, 1)); duck(0.4, 2.2);
+      const v = G.view, sx = v.ox + d.s.x * v.zoom, sy = v.oy + d.s.y * v.zoom;   // on screen, the speech bubble at the speaker is the caption
+      if (!onScreen(sx, sy, -20)) caption(`Voice ${dirWord(d.dx, d.dy)}, calling itself ${d.s.name}: "${d.s.line}"`, 'speech');
+      break;
+    }
     case 'pulse': if (d.s.clues.pulse) sndBreath(d.pan, 0.06 * (1 - d.d / 280)); break;   // only a recorded pulse is heard on its beat
     case 'clue': noise(0.3, { ft: 'bandpass', f: 3000, q: 2, vol: 0.04, bus: AU.bus.ui }); tone(1318, 0.5, { vol: 0.035, bus: AU.bus.ui, at: now + 0.15, rev: 0.4 }); break;
     case 'mimicReveal':   // recognition, contradiction, silence, then the tear
@@ -3006,11 +3047,11 @@ function renderDock() {
   $('dockPanel').innerHTML = `
     <div><p class="eyebrow">The Sanctuary · ${esc(G.node.name)} · ${fmtTime(G.t)} here, ${G.harvested} ember gathered</p><h2>Stay, or walk on?</h2><p class="muted">Time stands still while you decide. Warmth refills in the Sanctuary's light.</p></div>
     <div class="cols five">${col('If you leave, you keep', keep)}${col('Leaving costs', cost)}${col('Staying risks', risk)}${col('Going deeper could gain', gain)}${col('Can you come back?', back)}</div>
+    <div class="btn-row"><button class="btn" id="dockDepart" type="button">Walk on</button><button class="btn ghost" id="dockBack" type="button" data-autofocus>Back into the dark</button></div>
     <div class="card-surface resupply"><h3>Resupply</h3>
       <div class="buy"><span>Flare<i>${P.flares} / 5</i></span>${buy('flare', 'salvage', 1, fl && ex.salvage >= 1)}${buy('flare', 'ember', 4, fl && ex.ember >= 4)}</div>
       <div class="buy"><span>Beacon<i>${P.beacons} / ${beaconCap()}</i></span>${buy('beacon', 'salvage', 1, bc && ex.salvage >= 1)}${buy('beacon', 'ember', 5, bc && ex.ember >= 5)}</div>
-    </div>
-    <div class="btn-row"><button class="btn" id="dockDepart" type="button">Walk on</button><button class="btn ghost" id="dockBack" type="button" data-autofocus>Back into the dark</button></div>`;
+    </div>`;
   emit('dockOpen', {});
 }
 function buyItem(what, pay) {
