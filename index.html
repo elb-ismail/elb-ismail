@@ -156,7 +156,15 @@ blockquote { margin: 0; padding: 2px 0 2px 16px; border-left: 2px solid var(--la
 textarea { width: 100%; box-sizing: border-box; background: var(--night); color: var(--parch); border: 1px solid var(--rule); border-radius: 6px; font: 12px/1.4 var(--mono); padding: 8px; -webkit-user-select: text; user-select: text; }
 details.notes summary { cursor: pointer; font-weight: 600; }
 
-.toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(150px + env(safe-area-inset-top, 0px)); z-index: 8; width: min(520px, calc(100% - 32px)); box-sizing: border-box; padding: 12px 16px; border-radius: 8px; background: rgba(17, 23, 40, 0.95); border: 1px solid var(--rule); color: var(--parch); font-size: 14px; line-height: 1.5; pointer-events: none; }
+.guide { position: fixed; left: 50%; transform: translateX(-50%); top: calc(76px + env(safe-area-inset-top, 0px)); z-index: 8; width: min(460px, calc(100% - 32px)); box-sizing: border-box; padding: 10px 14px 11px; border-radius: 6px; background: rgba(12, 17, 30, 0.93); border: 1px solid rgba(255, 196, 107, 0.45); color: var(--parch); font-size: 14px; line-height: 1.45; pointer-events: none; display: grid; gap: 3px; }
+.guide b { color: var(--lamp); font: 600 11px/1.3 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; }
+.guide p { margin: 0; }
+.guide .ack { color: var(--good); }
+@media (max-width: 760px) { .guide { top: auto; bottom: calc(150px + env(safe-area-inset-bottom, 0px)); } }
+.cols.five { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.cols.five .list li { font-size: 13px; }
+.resupply { gap: 10px; }
+.toast-old { position: fixed; left: 50%; transform: translateX(-50%); top: calc(150px + env(safe-area-inset-top, 0px)); z-index: 8; width: min(520px, calc(100% - 32px)); box-sizing: border-box; padding: 12px 16px; border-radius: 8px; background: rgba(17, 23, 40, 0.95); border: 1px solid var(--rule); color: var(--parch); font-size: 14px; line-height: 1.5; pointer-events: none; }
 .toast b { color: var(--lamp); font-weight: 600; }
 
 #touchUi { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
@@ -173,7 +181,7 @@ details.notes summary { cursor: pointer; font-weight: 600; }
 <body>
 <div id="safe" aria-hidden="true"></div>
 <canvas id="game" aria-label="The Moving Sanctuary play area"></canvas>
-<div class="toast" id="toast" role="status" hidden></div>
+<div class="guide" id="guide" role="status" aria-live="polite" hidden></div>
 
 <div id="touchUi" hidden>
   <button class="tbtn" id="tUse" type="button">USE</button>
@@ -222,6 +230,7 @@ details.notes summary { cursor: pointer; font-weight: 600; }
 <section class="screen dim" id="scrPause" hidden><div class="panel center" id="pausePanel"></div></section>
 <section class="screen" id="scrDebrief" hidden><div class="panel wide" id="debriefPanel"></div></section>
 <section class="screen" id="scrChron" hidden><div class="panel wide" id="chronPanel"></div></section>
+<section class="screen dim" id="scrHelp" hidden><div class="panel" id="helpPanel"></div></section>
 <section class="screen" id="scrSettings" hidden><div class="panel" id="settingsPanel"></div></section>
 
 <script>
@@ -337,9 +346,13 @@ const LIKERT = [
 /* ===================== settings ===================== */
 const PREF = 'moving-sanctuary.settings.v1';
 const SAVE = 'moving-sanctuary.chronicle.v1';
-const DEF = { sound: true, music: true, shake: !reduced, flicker: !reduced, pace: 1, shift: 1, tells: 'subtle', ablate: { shift: false, adapt: false, persist: false, mimics: false } };
-const S = Object.assign({}, DEF, store.get(PREF, {}));
+const DEF_KEYS = { up: 'w', down: 's', left: 'a', right: 'd', use: 'e', flare: 'f', beacon: 'b', lens: 'q', focus: 'shift', help: 'h' };
+const DEF = { sound: true, music: true, shake: !reduced, flicker: !reduced, pace: 1, shift: 1, tells: 'subtle', ablate: { shift: false, adapt: false, persist: false, mimics: false },
+  vol: { master: 0.8, music: 0.6, ambience: 0.7, sfx: 0.8, voice: 0.9 }, captions: true, envCaptions: true, contrast: false, motion: !reduced, flashes: true, readable: false, keys: DEF_KEYS };
+const S = Object.assign({}, DEF, store.get(PREF, {}));   // saved settings keep their values; new options take defaults
 S.ablate = Object.assign({}, DEF.ablate, S.ablate || {});
+S.vol = Object.assign({}, DEF.vol, S.vol || {});
+S.keys = Object.assign({}, DEF_KEYS, S.keys || {});
 const saveSettings = () => store.set(PREF, S);
 const paceMul = () => (S.pace < 1 ? 0.8 : S.pace > 1 ? 1.25 : 1);
 
@@ -570,6 +583,8 @@ function genZone(node, preview) {
     const nx = other(edges[k], cur); vis[nx] = 1; stack.push(nx);
   }
   for (const e of edges) if (!e.open && lg() < 0.3) e.open = true;
+  const teach = CH.crossings === 1 && depth === 1;
+  if (teach) { const east = edges.find(e => e.a === dockR && e.b === dockR + 1); if (east) east.open = true; }   // golden path: a corridor leads out east
   const wall = new Uint8Array(GW * GH), doorTile = new Int16Array(GW * GH).fill(-1);
   for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) if (x % ROOM === 0 || y % ROOM === 0) wall[x + y * GW] = 1;
   for (let j = 0; j < RH; j++) for (let i = 0; i < RW; i++) {
@@ -612,13 +627,16 @@ function genZone(node, preview) {
       const p = spot(i, j); items.push({ kind: 'salvage', x: p.x, y: p.y, amt, max: amt }); totalS += amt;
     }
   }
-  const teach = CH.crossings === 1 && depth === 1;
   let count = 1 + (depth >= 2 ? 1 : 0) + (r() < 0.45 ? 1 : 0);
   if (teach) count = 2;
   const cand = [];
   for (let j = 0; j < RH; j++) for (let i = 0; i < RW; i++) if (rdist(i, j) >= 2) cand.push([i, j]);
   shuffle(r, cand);
-  const chosen = cand.slice(0, count).sort((a, b) => rdist(a[0], a[1]) - rdist(b[0], b[1]));
+  let chosen = cand.slice(0, count).sort((a, b) => rdist(a[0], a[1]) - rdist(b[0], b[1]));
+  if (teach) {   // stage the first voices: a nearer, louder one two rooms out, a quieter one deeper
+    const near = cand.find(c => rdist(c[0], c[1]) === 2), deep = cand.find(c => rdist(c[0], c[1]) >= 3 && c !== near);
+    if (near && deep) chosen = [near, deep];
+  }
   const mimicP = S.ablate.mimics ? 0 : clamp(0.28 + 0.14 * z.lostVoices.length + depth * 0.03, 0, 0.7);
   let kinds = chosen.map(() => r() >= mimicP);
   if (teach && !S.ablate.mimics) kinds = [false, true];
@@ -646,8 +664,13 @@ function genZone(node, preview) {
     if (best) { const p = spot(best[0], best[1]); items.push({ kind: 'relic', x: p.x, y: p.y, amt: 1, max: 1 }); relic = true; }
   }
   if (preview) return { ember: totalE, salvage: totalS, signals: signals.length, mimics: signals.filter(s => !s.real).length, relic };
-  return { node, z, depth, RW, RH, GW, GH, NR, dock, dockR, edges, wall, doorTile, items, signals, totalE, totalS, relic };
+  return { node, z, depth, RW, RH, GW, GH, NR, dock, dockR, edges, wall, doorTile, items, signals, totalE, totalS, relic, teach };
 }
+
+/* ===================== events: one bus for guidance, audio, effects and metrics ===================== */
+const listeners = [];
+function on(fn) { listeners.push(fn); }
+function emit(type, d) { d = d || {}; for (const fn of listeners) fn(type, d); }
 
 /* ===================== entering a place ===================== */
 function enterZone(id) {
@@ -657,58 +680,40 @@ function enterZone(id) {
   ex.inZone = id; ex.node = id;
   saveChronicle();
   const sx = (Z.dock.i * ROOM + 5) * T, sy = (Z.dock.j * ROOM + 5) * T;
+  // face the Warden toward an open doorway of the dock room, preferring the one leading deeper (east)
+  let face = 0;
+  const exits = Z.edges.map((e, k) => [e, k]).filter(([e]) => e.open && (e.a === Z.dockR || e.b === Z.dockR));
+  exits.sort((p, q) => (q[0].v && q[0].a === Z.dockR ? 1 : 0) - (p[0].v && p[0].a === Z.dockR ? 1 : 0));
+  if (exits.length) { const [e] = exits[0]; const c = e.v ? { x: (e.i + 1) * ROOM * T + T / 2, y: (e.j * ROOM + 5) * T } : { x: (e.i * ROOM + 5) * T, y: (e.j + 1) * ROOM * T + T / 2 }; face = Math.atan2(c.y - sy, c.x - sx); }
   const maxW = 100 + 25 * traitN('medic');
   G = {
-    Z, node, t: 0, dim: 0, dimRate: 1 / 210, blackout: false,
-    p: { x: sx + 80, y: sy, r: 11, vx: 0, vy: 0, warmth: maxW, maxW, aim: 0, focus: false, flares: ex.flares, beacons: ex.beacons, carryE: 0, carryS: 0, cap: 30, lens: 0, hurtT: 1 },
+    Z, node, face, t: 0, dim: 0, dimRate: 1 / 210, blackout: false, teach: !!Z.teach,
+    p: { x: sx + Math.cos(face) * 80, y: sy + Math.sin(face) * 80, r: 11, vx: 0, vy: 0, warmth: maxW, maxW, aim: face, focus: false, flares: ex.flares, beacons: ex.beacons, carryE: 0, carryS: 0, cap: 30, lens: 0, lensT: 0, hurtT: 1, walk: 0 },
     sanct: { x: sx, y: sy },
-    hollows: [], escorts: [], flares: [], parts: [],
-    beacons: Z.z.beacons.map(b => ({ x: b.x, y: b.y, c: b.c, lit: true, old: true })),
+    hollows: [], escorts: [], flares: [], parts: [], rings: [],
+    beacons: Z.z.beacons.map(b => ({ x: b.x, y: b.y, c: b.c, lit: true, old: true, placedT: -9 })),
     items: Z.items,
-    signals: Z.signals.map(s => Object.assign(s, { heardT: -99, heard: false, heardPos: null, sayT: 0, say: '', seenEchoT: 0, lastSeen: null, drifted: false, verified: false, dtx: s.x, dty: s.y, driftT: 0, lastPh: 0 })),
+    signals: Z.signals.map(s => Object.assign(s, { heardT: -99, heard: false, heardPos: null, sayT: 0, say: '', seenEchoT: 0, seenLitT: 0, lastSeen: null, drifted: false, verified: false, dtx: s.x, dty: s.y, driftT: 0, lastPh: 0, vis: false, clues: { pulse: null, moved: false }, trailFrom: null })),
     rooms: Array.from({ length: Z.NR }, () => ({ obsT: -9, seen: false })),
     mem: new Int8Array(Z.edges.length).fill(-1),
     doorSeenT: new Float32Array(Z.edges.length).fill(-9),
-    moved: [], logs: [], lights: [], trail: [],
-    shiftT: 3, spawnT: 1.5, surveyT: 0, adj: null,
+    moved: [], residue: [], logs: [], lights: [], trail: [],
+    shiftT: 3, spawnT: 1.5, surveyT: 0, homeT: 0, adj: null,
     tactic: { lantern: 0, flare: 0, beacon: 0 },
     harvested: 0, use: { key: null, t: 0, acc: 0 }, target: null,
     cam: { x: sx, y: sy }, zoom: 1, view: { ox: 0, oy: 0, zoom: 1 }, aimX: sx + 200, aimY: sy,
-    shake: 0, flicker: 0, hurtFlash: 0, fallT: 0, fallDone: false, lostAll: false, dimTipped: false,
+    shake: 0, flicker: 0, hurtFlash: 0, flash: 0, fallT: 0, fallDone: false, lostAll: false, dimTipped: false,
     banner: { text: node.name, sub: 'Depth ' + node.col + ' of 5', t: 3.2, max: 3.2 },
-    lastBeat: 0, lastMoveLog: -99, heardIds: new Set()
+    lastBeat: 0, lastMoveLog: -99, heardIds: new Set(), idleT: 0, lastInput: 0, lensT0: 0
   };
   buildAdj(); buildFloor();
   for (let i = 0; i < 1 + Math.floor(node.col / 2); i++) spawnHollowFar(true);
   updCamera(1);
   state = 'zone'; showScreen(null);
   auInit();
-  tip('start');
+  emit('enterZone', { teach: G.teach });
 }
-function buildFloor() {
-  const Z = G.Z, B = BIOMES[Z.z.biome];
-  const c = document.createElement('canvas');
-  c.width = Z.GW * T; c.height = Z.GH * T;
-  const g = c.getContext('2d');
-  g.fillStyle = B.floor; g.fillRect(0, 0, c.width, c.height);
-  const rng = mulberry32(Z.z.seed ^ 0x5bd1e995);
-  g.strokeStyle = B.grid; g.lineWidth = 1;
-  for (let y = 0; y < Z.GH; y++) for (let x = 0; x < Z.GW; x++) {
-    g.fillStyle = `rgba(255,255,255,${(rng() * 0.03).toFixed(3)})`; g.fillRect(x * T, y * T, T, T);
-    g.strokeRect(x * T + 0.5, y * T + 0.5, T - 1, T - 1);
-  }
-  for (let k = 0; k < Z.GW * Z.GH * 0.1; k++) { g.fillStyle = `rgba(0,0,0,${(0.15 + rng() * 0.2).toFixed(2)})`; g.fillRect(rng() * c.width, rng() * c.height, 2 + rng() * 4, 2 + rng() * 3); }
-  for (let y = 0; y < Z.GH; y++) for (let x = 0; x < Z.GW; x++) {
-    const k = x + y * Z.GW;
-    if (Z.wall[k] && Z.doorTile[k] < 0) wallTile(g, x, y, B.wall, B.cap);
-  }
-  G.floor = c;
-}
-function wallTile(g, x, y, fill, cap) {
-  g.fillStyle = fill; g.fillRect(x * T, y * T, T, T);
-  g.fillStyle = cap; g.fillRect(x * T, y * T, T, 5);
-  g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(x * T, y * T + T - 4, T, 4);
-}
+function buildFloor() { G.floor = paintFloor(G.Z); }
 
 /* ===================== map queries ===================== */
 function buildAdj() {
@@ -724,6 +729,7 @@ function bfs(from) {
 }
 function allConnected() { const d = bfs(G.Z.dockR); for (let i = 0; i < d.length; i++) if (d[i] < 0) return false; return true; }
 function roomAt(x, y) { const Z = G.Z; return clamp(Math.floor(x / (ROOM * T)), 0, Z.RW - 1) + clamp(Math.floor(y / (ROOM * T)), 0, Z.RH - 1) * Z.RW; }
+function roomGridDist(a, b) { const RW = G.Z.RW; return Math.abs(a % RW - b % RW) + Math.abs(Math.floor(a / RW) - Math.floor(b / RW)); }
 function roomObserved(k) { return G.t - G.rooms[k].obsT < 0.7; }
 function wallAt(tx, ty) { const Z = G.Z; if (tx < 0 || ty < 0 || tx >= Z.GW || ty >= Z.GH) return true; return Z.wall[tx + ty * Z.GW] === 1; }
 function nextRoom(from, to) {
@@ -742,26 +748,71 @@ function doorPass(a, b) {   // a point just past the doorway from room a into ro
   if (e.v) return { x: c.x + (b % Z.RW > a % Z.RW ? 30 : -30), y: c.y };
   return { x: c.x, y: c.y + (Math.floor(b / Z.RW) > Math.floor(a / Z.RW) ? 30 : -30) };
 }
+function homeDist() {   // steps home through doorways the Warden remembers as open (-1: no remembered way)
+  const Z = G.Z, pr = roomAt(G.p.x, G.p.y);
+  if (pr === Z.dockR) return 0;
+  const d = new Int16Array(Z.NR).fill(-1); d[pr] = 0; const q = [pr];
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h];
+    for (let k = 0; k < Z.edges.length; k++) {
+      if (G.mem[k] !== 1) continue;
+      const e = Z.edges[k], o = e.a === c ? e.b : e.b === c ? e.a : -1;
+      if (o < 0 || d[o] >= 0) continue;
+      d[o] = d[c] + 1;
+      if (o === Z.dockR) return d[o];
+      q.push(o);
+    }
+  }
+  return -1;
+}
 
-/* ===================== the rule: unlit doorways change ===================== */
+/* ===================== the rule: a doorway changes only while no light touches it ===================== */
+const PIN_R = 200;
+function doorLit(k) { return G.t - G.doorSeenT[k] < 0.7; }
+function doorPinned(k) {   // beacons pin the doorways of their room and any doorway within reach; the Sanctuary pins its own
+  const e = G.Z.edges[k];
+  if (e.a === G.Z.dockR || e.b === G.Z.dockR) return true;
+  const c = doorCenter(k);
+  for (const b of G.beacons) {
+    if (!b.lit) continue;
+    const br = roomAt(b.x, b.y);
+    if (br === e.a || br === e.b || Math.hypot(c.x - b.x, c.y - b.y) < PIN_R) return true;
+  }
+  return false;
+}
 function applyDoor(k) { const Z = G.Z, e = Z.edges[k]; for (const [x, y] of e.tiles) Z.wall[x + y * Z.GW] = e.open ? 0 : 1; }
-function tryShift() {
-  const Z = G.Z, E = Z.edges;
+function tryShift(opts) {
+  const Z = G.Z, E = Z.edges, pr = roomAt(G.p.x, G.p.y);
   let openCount = 0; for (const e of E) if (e.open) openCount++;
-  const minOpen = Z.NR - 1 + Math.floor(Z.NR * 0.15);
-  for (let tries = 0; tries < 10; tries++) {
-    const k = Math.floor(Math.random() * E.length), e = E[k];
-    if (roomObserved(e.a) || roomObserved(e.b)) continue;
-    if (G.t - G.doorSeenT[k] < 0.7) continue;
-    if (e.open && openCount <= minOpen) continue;
-    e.open = !e.open;
-    buildAdj();
+  const minOpen = Z.NR;   // connectivity is checked separately; keep at least one loop
+  const cands = []; let tot = 0;
+  E.forEach((e, k) => {
+    if (doorLit(k) || doorPinned(k)) return;
+    if (G.t - (e.changedAt ?? -99) < 18) return;    // a doorway that just changed settles: no instant rerolls
+    if (e.open && openCount <= minOpen) return;
+    const d = Math.min(roomGridDist(pr, e.a), roomGridDist(pr, e.b));
+    if (opts && opts.near && d > 1) return;
+    const w = d <= 1 ? 3 : d === 2 ? 1.5 : 0.6;     // the world is most restless close to you
+    cands.push([k, w]); tot += w;
+  });
+  for (let tries = 0; tries < 6 && cands.length; tries++) {
+    let r = Math.random() * tot, idx = 0;
+    for (; idx < cands.length - 1; idx++) { r -= cands[idx][1]; if (r <= 0) break; }
+    const [k, w] = cands[idx]; cands.splice(idx, 1); tot -= w;
+    const e = E[k];
+    e.open = !e.open; buildAdj();
     if (!e.open && !allConnected()) { e.open = true; buildAdj(); continue; }
     applyDoor(k);
+    e.changedAt = G.t;
+    const d = Math.min(roomGridDist(pr, e.a), roomGridDist(pr, e.b));
+    e.watchedChange = G.t - G.doorSeenT[k] < 12 && d <= 1;   // you had it in your light moments ago, then looked away
     unstickAll();
-    const pr = roomAt(G.p.x, G.p.y), d = bfs(pr);
-    const near = Math.min(d[e.a] < 0 ? 9 : d[e.a], d[e.b] < 0 ? 9 : d[e.b]);
-    if (near <= 2) { const c = doorCenter(k); SFX.grind(clamp((c.x - G.p.x) / 500, -1, 1)); }
+    G.residue.push({ k, t: G.t, open: e.open });
+    if (G.residue.length > 24) G.residue.shift();
+    const c = doorCenter(k);
+    emit('doorChanged', { k, near: d <= 2, dx: c.x - G.p.x, dy: c.y - G.p.y });
+    // settling stone can wake something nearby: looking away is never free
+    if (d <= 2 && Math.random() < (G.teach && G.t < 60 ? 0.12 : 0.3) && spawnHollowNear(pr)) emit('stirred', { k });
     return true;
   }
   return false;
@@ -802,14 +853,22 @@ function markTile(tx, ty) {
 }
 function doorSeen(k) {
   G.doorSeenT[k] = G.t;
-  const v = G.Z.edges[k].open ? 1 : 0, m = G.mem[k];
-  if (m !== -1 && m !== v) {
-    CH.exp.stats.doorSurprises++;
-    G.moved.push({ k, t: 2.5 });
-    tip('door');
-    if (G.t - G.lastMoveLog > 8) { log('A doorway changed since you last saw it.', 'survey'); G.lastMoveLog = G.t; }
-  }
+  const v = G.Z.edges[k].open ? 1 : 0;
+  if (G.mem[k] !== -1 && G.mem[k] !== v) discoverDoor(k, v, 'light'); else G.mem[k] = v;
+}
+function discoverDoor(k, v, how) {   // you learn that a remembered doorway is no longer as you left it
+  const before = homeDist();
   G.mem[k] = v;
+  const after = homeDist();
+  const ex = CH.exp, e = G.Z.edges[k];
+  ex.stats.doorSurprises++;
+  if (ex.stats.firstDoorT == null) ex.stats.firstDoorT = Math.round(ex.stats.time);
+  const manip = !!e.watchedChange;
+  if (manip) { ex.stats.manipulations = (ex.stats.manipulations || 0) + 1; e.watchedChange = false; }
+  if (how === 'survey') ex.stats.lensInformed = (ex.stats.lensInformed || 0) + 1;
+  G.moved.push({ k, t: 2.5 });
+  const homeBroken = before >= 0 && (after < 0 || after > before);
+  emit('doorDiscovered', { k, how, manip, homeBroken, open: !!v });
 }
 function surveyScan() {   // the Survey lens: learn the true doorways nearby (knowledge only; it does not hold them still)
   const P = G.p;
@@ -817,8 +876,7 @@ function surveyScan() {   // the Survey lens: learn the true doorways nearby (kn
     const c = doorCenter(k);
     if (Math.hypot(c.x - P.x, c.y - P.y) > 760) return;
     const v = e.open ? 1 : 0;
-    if (G.mem[k] !== -1 && G.mem[k] !== v) { G.moved.push({ k, t: 2.5 }); CH.exp.stats.doorSurprises++; }
-    G.mem[k] = v;
+    if (G.mem[k] !== -1 && G.mem[k] !== v) discoverDoor(k, v, 'survey'); else G.mem[k] = v;
   });
 }
 function lanternMul() { return (1 + 0.2 * traitN('lamplighter')) * (G.p.lens ? 0.62 : 1) * (G.blackout ? 0.78 : 1); }
@@ -837,15 +895,15 @@ function castLight(L) {
   L.poly = pts;
 }
 function buildLights() {
-  const P = G.p, L = [], m = lanternMul();
+  const P = G.p, L = [], m = lanternMul(), breathe = 1 + 0.018 * Math.sin(G.t * 2.1);
   L.push({ x: P.x, y: P.y, r: 80, full: true, rays: 64, kind: 'glow', freeze: false, alpha: 0.92 });
   if (G.fallT <= 0) {
     if (P.focus) L.push({ x: P.x, y: P.y, r: 390 * m, full: false, mid: P.aim, half: 0.2, rays: 30, kind: 'focus', freeze: true, alpha: 1 });
-    else L.push({ x: P.x, y: P.y, r: 270 * m, full: false, mid: P.aim, half: 0.62, rays: 56, kind: 'cone', freeze: true, alpha: 0.95 });
+    else L.push({ x: P.x, y: P.y, r: 270 * m * breathe, full: false, mid: P.aim, half: 0.62, rays: 56, kind: 'cone', freeze: true, alpha: 0.95 });
   }
-  L.push({ x: G.sanct.x, y: G.sanct.y, r: 235, full: true, rays: 96, kind: 'sanct', freeze: true, alpha: 0.95 });
+  L.push({ x: G.sanct.x, y: G.sanct.y, r: 235 * (1 + 0.012 * Math.sin(G.t * 1.3)), full: true, rays: 96, kind: 'sanct', freeze: true, alpha: 0.95 });
   for (const b of G.beacons) if (b.lit) L.push({ x: b.x, y: b.y, r: 150, full: true, rays: 72, kind: 'beacon', freeze: true, alpha: 0.9 });
-  for (const f of G.flares) if (f.burst) {
+  for (const f of G.flares) if (f.burst && f.life > 0) {
     const k = clamp(f.life / f.max, 0, 1);
     L.push({ x: f.x, y: f.y, r: 260 * flareMul() * (0.55 + 0.45 * k), full: true, rays: 80, kind: 'flare', freeze: k > 0.04, alpha: Math.min(1, k * 2.5) });
   }
@@ -866,25 +924,31 @@ function litInfo(x, y, pad) {
   }
   return o;
 }
+function losFromPlayer(x, y) { const P = G.p, d = Math.hypot(x - P.x, y - P.y); return d < 8 || ray(P.x, P.y, Math.atan2(y - P.y, x - P.x), d, false) >= d - 12; }
 
 /* ===================== movement ===================== */
 function moveCircle(o, dx, dy, r) {
   const n = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / 6));
-  for (let i = 0; i < n; i++) { o.x += dx / n; resolveWalls(o, r); o.y += dy / n; resolveWalls(o, r); }
+  let hit = false;
+  for (let i = 0; i < n; i++) { o.x += dx / n; hit = resolveWalls(o, r) || hit; o.y += dy / n; hit = resolveWalls(o, r) || hit; }
+  return hit;
 }
 function resolveWalls(o, r) {
   const x0 = Math.floor((o.x - r) / T), x1 = Math.floor((o.x + r) / T), y0 = Math.floor((o.y - r) / T), y1 = Math.floor((o.y + r) / T);
+  let hit = false;
   for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) {
     if (!wallAt(tx, ty)) continue;
     const cx = clamp(o.x, tx * T, tx * T + T), cy = clamp(o.y, ty * T, ty * T + T);
     const dx = o.x - cx, dy = o.y - cy, d2 = dx * dx + dy * dy;
     if (d2 >= r * r) continue;
+    hit = true;
     if (d2 > 1e-6) { const d = Math.sqrt(d2), p = (r - d) / d; o.x += dx * p; o.y += dy * p; }
     else {
       const l = o.x - tx * T, rg = tx * T + T - o.x, u = o.y - ty * T, dn = ty * T + T - o.y, m = Math.min(l, rg, u, dn);
       if (m === l) o.x = tx * T - r; else if (m === rg) o.x = tx * T + T + r; else if (m === u) o.y = ty * T - r; else o.y = ty * T + T + r;
     }
   }
+  return hit;
 }
 function pushFromSanct(o) {
   const dx = o.x - G.sanct.x, dy = o.y - G.sanct.y, d = Math.hypot(dx, dy), R = 42 + o.r;
@@ -895,22 +959,17 @@ function updCamera(dt) {
   G.zoom = clamp(Math.min(W / 1150, H / 760), 0.62, 1.1);
   const vw = W / G.zoom, vh = H / G.zoom, zw = Z.GW * T, zh = Z.GH * T;
   const tx = P.x + Math.cos(P.aim) * 50, ty = P.y + Math.sin(P.aim) * 50;
-  G.cam.x = lerp(G.cam.x, tx, Math.min(1, dt * 5)); G.cam.y = lerp(G.cam.y, ty, Math.min(1, dt * 5));
+  const k = 1 - Math.exp(-dt * 5);
+  G.cam.x = lerp(G.cam.x, tx, k); G.cam.y = lerp(G.cam.y, ty, k);
   G.cam.x = zw < vw ? zw / 2 : clamp(G.cam.x, vw / 2 - 40, zw - vw / 2 + 40);
   G.cam.y = zh < vh ? zh / 2 : clamp(G.cam.y, vh / 2 - 90, zh - vh / 2 + 70);
 }
 
 /* ===================== small helpers ===================== */
-function addPart(x, y, col, spd, life, size) { if (G.parts.length > 600) return; const a = Math.random() * TAU, v = spd * rand(0.3, 1); G.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 10, life, max: life, col, size }); }
+function addPart(x, y, col, spd, life, size, kind) { if (G.parts.length > 500) return; const a = Math.random() * TAU, v = spd * rand(0.3, 1); G.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 10, life, max: life, col, size, kind: kind || 'spark' }); }
 function addBurst(x, y, col, n) { for (let i = 0; i < n; i++) addPart(x, y, col, 140, 0.7, 2.5); }
+function addRing(x, y, col, r0, r1, life, w, kind) { if (G.rings.length > 40) G.rings.shift(); G.rings.push({ x, y, col, r0, r1, t: 0, life, w: w || 2, kind: kind || 'circle' }); }
 function log(text, kind) { if (!G) return; G.logs.push({ text, kind: kind || '', t: 0 }); if (G.logs.length > 6) G.logs.shift(); }
-const tipQ = []; let toastT = 0;
-function tip(k) { if (!CH || !TIPS[k] || CH.tips[k]) return; CH.tips[k] = 1; tipQ.push(TIPS[k]); }
-function toastTick(dt) {
-  const el = $('toast');
-  if (toastT > 0) { toastT -= dt; if (toastT <= 0 || state !== 'zone') { el.hidden = true; toastT = 0; } return; }
-  if (tipQ.length && state === 'zone') { el.innerHTML = tipQ.shift(); el.hidden = false; toastT = 8; }
-}
 
 /* ===================== Hollows ===================== */
 function pickKind() {
@@ -918,40 +977,51 @@ function pickKind() {
   return act.length && Math.random() < 0.45 ? pick(act) : 'plain';
 }
 function spawnHollowAt(x, y, kind, emerge) {
-  const h = { x, y, r: 12, kind: kind || pickKind(), burn: 0, stun: 0, emerge: emerge ?? 1.2, wp: null, wpT: 0, wpRoom: -1, jitT: 0, jitA: 0, stuckT: 0, seed: Math.random() * 100, gnawT: 0, dead: false, frozen: false, ang: 0 };
+  const h = { x, y, r: 12, kind: kind || pickKind(), burn: 0, stun: 0, emerge: emerge ?? 1.2, wp: null, wpT: 0, wpRoom: -1, jitT: 0, jitA: 0, stuckT: 0, seed: Math.random() * 100, gnawT: 0, dead: false, frozen: false, vis: false, ang: 0, threatT: -9, spd: 0 };
   G.hollows.push(h);
   return h;
+}
+function spawnInRoom(k, emerge) {
+  const Z = G.Z, i = k % Z.RW, j = Math.floor(k / Z.RW);
+  for (let t = 0; t < 20; t++) {
+    const tx = i * ROOM + 1 + Math.floor(Math.random() * 8), ty = j * ROOM + 1 + Math.floor(Math.random() * 8);
+    if (!wallAt(tx, ty)) return spawnHollowAt((tx + 0.5) * T, (ty + 0.5) * T, null, emerge);
+  }
+  return null;
 }
 function spawnHollowFar(initial) {
   const Z = G.Z, d = bfs(roomAt(G.p.x, G.p.y)), cand = [];
   for (let k = 0; k < Z.NR; k++) if (k !== Z.dockR && (d[k] < 0 || d[k] >= 2) && !roomObserved(k)) cand.push(k);
-  if (!cand.length) return false;
-  const k = pick(cand), i = k % Z.RW, j = Math.floor(k / Z.RW);
-  for (let t = 0; t < 20; t++) {
-    const tx = i * ROOM + 1 + Math.floor(Math.random() * 8), ty = j * ROOM + 1 + Math.floor(Math.random() * 8);
-    if (!wallAt(tx, ty)) { spawnHollowAt((tx + 0.5) * T, (ty + 0.5) * T, null, initial ? 0 : 1.2); return true; }
-  }
-  return false;
+  return cand.length ? !!spawnInRoom(pick(cand), initial ? 0 : 1.2) : false;
 }
-function hollowSpeed() { return 62 * S.pace * (1 + G.dim * 0.5 + G.Z.depth * 0.05) * (G.blackout ? 1.2 : 1); }
+function spawnHollowNear(pr) {
+  const Z = G.Z, cand = [];
+  for (let k = 0; k < Z.NR; k++) { const d = roomGridDist(pr, k); if (k !== Z.dockR && k !== pr && d <= 2 && !roomObserved(k)) cand.push(k); }
+  return cand.length ? !!spawnInRoom(pick(cand), 1.4) : false;
+}
+function hollowSpeed() { return 62 * S.pace * (1 + G.dim * 0.5 + G.Z.depth * 0.05) * (G.blackout ? 1.2 : 1) * (G.teach ? 0.85 : 1) * (G.guideSlow || 1); }
 function updHollow(h, dt) {
   const P = G.p;
-  if (h.emerge > 0) { h.emerge -= dt; return; }
+  if (h.emerge > 0) { h.emerge -= dt; h.vis = false; return; }
   const L = litInfo(h.x, h.y, h.r);
-  if (L.seen) tip('hollow');
+  h.vis = L.seen;
+  if (L.seen && !h.seenOnce) { h.seenOnce = true; emit('hollowSeen', { h }); }
   if (L.focus) {
     h.burn += dt * (h.kind === 'veiled' ? 0.33 : 1);
-    if (Math.random() < 0.5) addPart(h.x + rand(-8, 8), h.y + rand(-8, 8), '#ffb35c', 30, 0.4, 2);
-    SFX.burn();
+    if (Math.random() < 0.5) addPart(h.x + rand(-8, 8), h.y + rand(-8, 8), '#ffb35c', 30, 0.4, 2, 'ember');
+    emit('burning', { h });
     if (h.burn >= 1.1) { dissolve(h, 'lantern'); return; }
   } else h.burn = Math.max(0, h.burn - dt * 0.6);
-  if (h.stun > 0) { h.stun -= dt; h.frozen = true; return; }
-  let frozen = false, slow = 1;
-  if (L.sanct || L.flare) frozen = true;
-  if (L.beacon && h.kind !== 'gnawer') { frozen = true; if (!(L.cone || L.focus || L.sanct || L.flare)) G.tactic.beacon += dt; }
-  if (L.cone || L.focus) { if (h.kind === 'veiled') slow = 0.35; else frozen = true; }
+  const was = h.frozen;
+  if (h.stun > 0) { h.stun -= dt; h.frozen = true; if (!was) emit('freeze', { h, by: 'flare' }); return; }
+  let frozen = false, slow = 1, by = '';
+  if (L.sanct || L.flare) { frozen = true; by = L.sanct ? 'sanct' : 'flare'; }
+  if (L.beacon && h.kind !== 'gnawer') { frozen = true; by = by || 'beacon'; if (!(L.cone || L.focus || L.sanct || L.flare)) G.tactic.beacon += dt; }
+  if (L.cone || L.focus) { if (h.kind === 'veiled') slow = 0.35; else { frozen = true; by = 'lantern'; } }
   h.frozen = frozen;
-  if (frozen) return;
+  if (frozen && !was) emit('freeze', { h, by });
+  if (!frozen && was) emit('release', { h });
+  if (frozen) { h.spd = 0; return; }
   let tx = P.x, ty = P.y, tb = null;
   if (h.kind === 'gnawer') {
     let bd = 1100;
@@ -969,28 +1039,33 @@ function updHollow(h, dt) {
     if (h.wpT <= 0 || h.wpRoom !== hr) { const nr = nextRoom(hr, trm); h.wp = nr >= 0 ? doorPass(hr, nr) : null; h.wpT = 0.5; h.wpRoom = hr; }
     if (h.wp) { gx = h.wp.x; gy = h.wp.y; } else { gx = h.x; gy = h.y; }
   }
-  const spd = hollowSpeed() * slow;
+  const spd = hollowSpeed() * slow * (h.kind === 'gnawer' ? 1 + 0.25 * Math.sin(G.t * 11 + h.seed) : 1);
   let a = Math.atan2(gy - h.y, gx - h.x);
   if (h.jitT > 0) { h.jitT -= dt; a += h.jitA; }
   const ox = h.x, oy = h.y, far = Math.hypot(gx - h.x, gy - h.y);
   if (far > 2) moveCircle(h, Math.cos(a) * spd * dt, Math.sin(a) * spd * dt, h.r);
-  if (far > 20 && Math.hypot(h.x - ox, h.y - oy) < spd * dt * 0.3) {
+  const moved = Math.hypot(h.x - ox, h.y - oy);
+  h.spd = moved / Math.max(dt, 1e-4);
+  if (far > 20 && moved < spd * dt * 0.3) {
     h.stuckT += dt; if (h.stuckT > 0.3) { h.jitT = 0.45; h.jitA = (Math.random() < 0.5 ? -1 : 1) * 1.25; h.stuckT = 0; }
   } else h.stuckT = 0;
   h.ang = a;
   const ds = Math.hypot(h.x - G.sanct.x, h.y - G.sanct.y);
   if (ds < 190 && ds > 0.01) { h.x += (h.x - G.sanct.x) / ds * (190 - ds); h.y += (h.y - G.sanct.y) / ds * (190 - ds); unstick(h); }
+  // something slipping in at the edge of your light, where you are not looking
+  const dp = Math.hypot(P.x - h.x, P.y - h.y);
+  if (dp < 150 && G.t - h.threatT > 6 && G.fallT <= 0) { h.threatT = G.t; emit('edgeThreat', { h, dx: h.x - P.x, dy: h.y - P.y }); }
   if (tb && Math.hypot(tb.x - h.x, tb.y - h.y) < 24) {
     h.gnawT += dt;
-    if (h.gnawT > 1.4) { tb.lit = false; h.gnawT = 0; addBurst(tb.x, tb.y, '#8a7ab8', 14); log('A Gnawer snuffed one of your beacons.', 'bad'); SFX.dissolve(0); }
+    if (h.gnawT > 1.4) { tb.lit = false; h.gnawT = 0; addBurst(tb.x, tb.y, '#8a7ab8', 14); log('A Gnawer snuffed one of your beacons.', 'bad'); emit('beaconSnuffed', { b: tb }); }
   }
-  if (G.fallT <= 0 && Math.hypot(P.x - h.x, P.y - h.y) < h.r + P.r) { hurt(18 * paceMul()); dissolve(h, 'contact'); return; }
+  if (G.fallT <= 0 && dp < h.r + P.r) { hurt(18 * paceMul()); dissolve(h, 'contact'); return; }
   for (const e of G.escorts) if (Math.hypot(e.x - h.x, e.y - h.y) < h.r + 9) { scareEscort(e); dissolve(h, 'contact'); return; }
 }
 function dissolve(h, how) {
   h.dead = true;
   addBurst(h.x, h.y, how === 'lantern' ? '#ffb35c' : how === 'flare' ? '#ffd9a8' : '#8a7ab8', 16);
-  SFX.dissolve(clamp((h.x - G.p.x) / 400, -1, 1));
+  emit('dissolve', { h, how });
   if (how === 'lantern') { G.tactic.lantern++; CH.exp.stats.burns++; if (Math.random() < 0.3) G.items.push({ kind: 'ember', x: h.x, y: h.y, amt: 1, max: 1 }); }
   if (how === 'flare') CH.exp.stats.burns++;
 }
@@ -1001,16 +1076,22 @@ function hurt(n) {
   if (P.hurtT > 0 || G.fallT > 0) return;
   P.warmth -= n; P.hurtT = 0.8;
   G.shake = Math.min(14, G.shake + 8); G.hurtFlash = 0.45; G.flicker = 0.6;
-  SFX.hurt();
-  if (P.warmth <= 0) { P.warmth = 0; G.fallT = 2.2; G.fallDone = false; log('Your lantern gutters. You are falling into the dark...', 'bad'); }
+  emit('hurt', { n });
+  if (P.warmth <= 0) { P.warmth = 0; G.fallT = 2.2; G.fallDone = false; log('Your lantern gutters. You are falling into the dark...', 'bad'); emit('falling', {}); }
 }
 function waitingSignal(e) {
-  return { id: 'w' + Math.random().toString(36).slice(2), real: true, name: e.name, trait: e.trait, x: e.x, y: e.y, line: `I'm still here. It's ${e.name}. Don't leave me.`, period: 1, verified: true, heard: true, heardPos: { x: e.x, y: e.y }, heardT: -99, sayT: 0, say: '', seenEchoT: 9, lastSeen: null, drifted: false, dtx: e.x, dty: e.y, driftT: 0, lastPh: 0 };
+  return { id: 'w' + Math.random().toString(36).slice(2), real: true, name: e.name, trait: e.trait, x: e.x, y: e.y, line: `I'm still here. It's ${e.name}. Don't leave me.`, period: 1, verified: true, heard: true, heardPos: { x: e.x, y: e.y }, heardT: -99, sayT: 0, say: '', seenEchoT: 9, seenLitT: 9, lastSeen: null, drifted: false, dtx: e.x, dty: e.y, driftT: 0, lastPh: 0, vis: false, clues: { pulse: 'in', moved: false }, trailFrom: null, waiting: true };
 }
 function resolveFall() {   // selective loss: pack and escorts stay where you fell; a crew member carries you home
   const P = G.p, ex = CH.exp;
   ex.stats.falls++;
-  if (P.carryE + P.carryS > 0) { G.items.push({ kind: 'pack', x: P.x, y: P.y, e: P.carryE, s: P.carryS, amt: 1, max: 1 }); log(`Your pack fell where you did: ${P.carryE} ember, ${P.carryS} salvage.`, 'warn'); P.carryE = P.carryS = 0; }
+  const fx = P.x, fy = P.y;
+  if (P.carryE + P.carryS > 0) {
+    G.items.push({ kind: 'pack', x: P.x, y: P.y, e: P.carryE, s: P.carryS, amt: 1, max: 1, droppedT: G.t });
+    log(`Your pack fell where you did: ${P.carryE} ember, ${P.carryS} salvage.`, 'warn');
+    emit('packDrop', { e: P.carryE, s: P.carryS, x: P.x, y: P.y });
+    P.carryE = P.carryS = 0;
+  }
   for (const e of G.escorts) { const s = waitingSignal(e); G.signals.push(s); G.heardIds.add(s.id); log(`${e.name} is hiding where you fell. Go back for them.`, 'warn'); }
   G.escorts = [];
   const cands = CH.crew.filter(c => c.scars < 2);
@@ -1020,7 +1101,9 @@ function resolveFall() {   // selective loss: pack and escorts stay where you fe
   P.x = G.sanct.x + 70; P.y = G.sanct.y; P.vx = P.vy = 0; P.warmth = P.maxW * 0.6; P.hurtT = 2.5;
   G.dim = Math.min(1, G.dim + 0.12); G.trail = [];
   G.cam.x = P.x; G.cam.y = P.y;
+  G.fellAt = { x: fx, y: fy };
   log(`${c.name} dragged you back to the Sanctuary. The dark thickens.`, 'warn');
+  emit('carried', { crew: c, fx, fy });
 }
 
 /* ===================== survivors, escorts and mimics ===================== */
@@ -1030,7 +1113,7 @@ function updEscorts(dt) {
     const idx = Math.max(0, G.trail.length - 1 - (k + 1) * 4);
     const tp = G.trail[idx] || P;
     const dx = tp.x - e.x, dy = tp.y - e.y, d = Math.hypot(dx, dy);
-    if (d > 10) { const sp = Math.min(170, d * 3.5); moveCircle(e, dx / d * sp * dt, dy / d * sp * dt, 9); }
+    if (d > 10) { const sp = Math.min(170, d * 3.5); moveCircle(e, dx / d * sp * dt, dy / d * sp * dt, 9); e.walk = (e.walk || 0) + sp * dt; e.ang = Math.atan2(dy, dx); }
     e.shakeT = Math.max(0, (e.shakeT || 0) - dt);
     if (Math.hypot(e.x - G.sanct.x, e.y - G.sanct.y) < 115) e.home = true;
   });
@@ -1043,48 +1126,58 @@ function scareEscort(e) {
     CH.exp.stats.taken++;
     record('taken', `${e.name} was taken by the dark in ${G.node.name} while you led them home.`, G.node.name);
     log(`${e.name} was taken by the dark.`, 'bad');
-    addBurst(e.x, e.y, '#8a7ab8', 20); SFX.shriek();
-  } else { e.shaken = true; e.shakeT = 1; log(`${e.name} was grabbed and pulled free. One more touch and they are gone.`, 'warn'); SFX.hurt(); }
+    addBurst(e.x, e.y, '#8a7ab8', 20);
+    emit('taken', { e });
+  } else { e.shaken = true; e.shakeT = 1; log(`${e.name} was grabbed and pulled free. One more touch and they are gone.`, 'warn'); emit('shaken', { e }); }
 }
 function joinCrew(e) {
   CH.crew.push(makeCrew(CH, e.trait, e.name, G.node.name));
   CH.exp.stats.rescued++;
   record('rescue', `${e.name}, a ${TRAITS[e.trait].label}, joined the Sanctuary from ${G.node.name}.`, G.node.name);
   log(`${e.name} is aboard. ${TRAITS[e.trait].label}: ${TRAITS[e.trait].desc}`, 'good');
-  SFX.rescue();
+  emit('joined', { e });
 }
 function sigPhase(s) {
   if (s.real) return G.t % 1;   // survivors breathe with the Sanctuary's heartbeat
   const per = s.period + (S.tells === 'clear' ? 0.12 : 0) + 0.08 * traitN('listener');
   return (G.t / per) % 1;
 }
+function noteClue(s, kind) {   // the clue ledger: only what the Warden actually observed
+  if (kind === 'pulse' && !s.clues.pulse) { s.clues.pulse = s.real ? 'in' : 'off'; if (!s.real) CH.exp.stats.lensInformed = (CH.exp.stats.lensInformed || 0) + (s.seenEchoT >= 2 ? 1 : 0); emit('clue', { s, kind, value: s.clues.pulse }); }
+  if (kind === 'moved' && !s.clues.moved) { s.clues.moved = true; emit('clue', { s, kind, value: true }); }
+}
 function updSignals(dt) {
   const P = G.p;
   for (const s of G.signals) {
     const d = Math.hypot(P.x - s.x, P.y - s.y);
     const visible = litInfo(s.x, s.y, 8).seen;
+    s.vis = visible;
     if (!s.real && !visible && !roomObserved(roomAt(s.x, s.y))) {   // mimics wander while unwatched
       s.driftT -= dt;
-      if (s.driftT <= 0) { s.driftT = rand(4, 8); const k = roomAt(s.x, s.y), i = k % G.Z.RW, j = Math.floor(k / G.Z.RW); s.dtx = (i * ROOM + rand(1.5, 8.5)) * T; s.dty = (j * ROOM + rand(1.5, 8.5)) * T; }
+      if (s.driftT <= 0) { s.driftT = rand(G.teach ? 3 : 4, G.teach ? 5 : 8); const k = roomAt(s.x, s.y), i = k % G.Z.RW, j = Math.floor(k / G.Z.RW); s.dtx = (i * ROOM + rand(1.5, 8.5)) * T; s.dty = (j * ROOM + rand(1.5, 8.5)) * T; }
       const dx = s.dtx - s.x, dy = s.dty - s.y, dd = Math.hypot(dx, dy);
-      if (dd > 2) moveCircle(s, dx / dd * 9 * dt, dy / dd * 9 * dt, 8);
+      if (dd > 2) moveCircle(s, dx / dd * (G.teach ? 14 : 9) * dt, dy / dd * (G.teach ? 14 : 9) * dt, 8);
     }
     if (visible) {
       if (s.lastSeen && !s.drifted && Math.hypot(s.x - s.lastSeen.x, s.y - s.lastSeen.y) > 18) {
-        s.drifted = true;
-        if (S.tells === 'clear') log(`The voice calling itself ${s.name} is not where you last saw it.`, 'echo');
+        s.drifted = true; s.trailFrom = { x: s.lastSeen.x, y: s.lastSeen.y, t: G.t };
+        noteClue(s, 'moved');
+        log(`The voice calling itself ${s.name} is not where you last saw it.`, 'echo');
       }
       s.lastSeen = { x: s.x, y: s.y };
+      if (d < 200) s.seenLitT += dt;   // its glow breathes with its pulse: watch long enough and you can tell
     }
     if (P.lens === 2 && d < Math.max(W, H) / G.zoom * 0.6) s.seenEchoT += dt;
+    if (s.seenEchoT >= 2 || s.seenLitT >= 4) noteClue(s, 'pulse');
     if (d < 250 && G.t - s.heardT > 10) {
       s.heardT = G.t; s.heard = true; if (!s.heardPos) s.heardPos = { x: s.x, y: s.y };
       s.say = s.line + (!s.real && S.tells === 'clear' ? ' (the words fold back on themselves)' : ''); s.sayT = 5.5;
-      if (!G.heardIds.has(s.id)) { G.heardIds.add(s.id); tip('signal'); log(`A voice: "${s.line}"`, 'echo'); }
+      if (!G.heardIds.has(s.id)) { G.heardIds.add(s.id); log(`A voice: "${s.line}"`, 'echo'); }
+      emit('voice', { s, dx: s.x - P.x, dy: s.y - P.y });
     }
     s.sayT = Math.max(0, s.sayT - dt);
     const ph = sigPhase(s);
-    if (ph < s.lastPh && d < 280) SFX.chime(s.real, clamp((s.x - P.x) / 300, -1, 1), 0.045 * (1 - d / 280));
+    if (ph < s.lastPh && d < 280) emit('pulse', { s, d, pan: clamp((s.x - P.x) / 300, -1, 1) });
     s.lastPh = ph;
   }
 }
@@ -1093,88 +1186,96 @@ function revealMimic(s, how) {
   const ex = CH.exp;
   ex.stats.mimicsMet++;
   if (how === 'flare') ex.stats.mimicsExposed++;
-  const cues = { rhythm: s.seenEchoT >= 2, drift: s.drifted, voice: s.heard };
+  const cues = { rhythm: s.clues.pulse === 'off', drift: !!s.clues.moved, voice: s.heard };
   ex.stats.mimicCues.push({ zone: G.node.name, name: s.name, how, cues });
   const n = 2 + (G.Z.depth >= 3 ? 1 : 0);
-  for (let i = 0; i < n; i++) { const a = i / n * TAU; const h = spawnHollowAt(s.x + Math.cos(a) * 14, s.y + Math.sin(a) * 14, null, 0); unstick(h); h.stun = how === 'flare' ? 3 : 0.7; }
-  addBurst(s.x, s.y, '#8a7ab8', 26);
-  SFX.shriek(); G.flicker = 1; G.shake = Math.min(14, G.shake + 6);
+  const spawned = [];
+  for (let i = 0; i < n; i++) { const a = i / n * TAU; const h = spawnHollowAt(s.x + Math.cos(a) * 14, s.y + Math.sin(a) * 14, null, how === 'flare' ? 0 : 0.9); unstick(h); h.stun = how === 'flare' ? 3 : 0; spawned.push(h); }
   G.dim = Math.min(1, G.dim + 0.03);
-  if (how === 'touch') hurt(8);
   const seen = [];
   if (cues.rhythm) seen.push('its pulse ran off the heartbeat');
   if (cues.drift) seen.push('it had moved since you last saw it');
   log(how === 'flare' ? `The voice calling itself ${s.name} recoiled from the flare. A mimic, exposed from a distance.` : `It was not ${s.name}. It was a mimic.`, how === 'flare' ? 'good' : 'bad');
-  log(seen.length ? `The clues were there: ${seen.join(', and ')}.` : 'Its pulse never matched the Sanctuary heartbeat. The Echo lens (3) shows it.', 'echo');
+  log(seen.length ? `What you noticed: ${seen.join(', and ')}.` : 'You had not checked its pulse. The Echo lens shows it against the heartbeat.', 'echo');
   record('mimic', how === 'flare' ? `A mimic using the name ${s.name} was exposed by flare in ${G.node.name}.` : `A mimic using the name ${s.name} ambushed the Warden in ${G.node.name}.`, G.node.name);
-  tip('mimic');
+  emit('mimicReveal', { s, how, cues, x: s.x, y: s.y });
+  if (how === 'touch') { G.reveal = { x: s.x, y: s.y, t: 0, name: s.name, cues }; }
 }
 function rescue(s) {
   G.signals = G.signals.filter(x => x !== s);
-  G.escorts.push({ name: s.name, trait: s.trait, x: s.x, y: s.y, shaken: false, shakeT: 0, home: false });
+  G.escorts.push({ name: s.name, trait: s.trait, x: s.x, y: s.y, shaken: false, shakeT: 0, home: false, walk: 0, ang: 0 });
   log(`${s.name}: "Thank you. Lead the way. I'll stay close to your light."`, 'good');
-  SFX.rescue(); tip('escort');
+  emit('rescue', { s });
 }
 
 /* ===================== flares and beacons ===================== */
 function throwFlare() {
   const P = G.p;
-  if (P.flares <= 0) { log('No flares left. Resupply at the Sanctuary.', 'warn'); return; }
+  if (P.flares <= 0) { log('No flares left. Resupply at the Sanctuary.', 'warn'); emit('empty', { what: 'flare' }); return; }
   P.flares--; CH.exp.stats.flares++; G.tactic.flare++;
   const a = Math.atan2(G.aimY - P.y, G.aimX - P.x);
   const want = Math.min(320, Math.max(40, Math.hypot(G.aimX - P.x, G.aimY - P.y)));
   const t = ray(P.x, P.y, a, want, false);
   const land = t < want ? Math.max(0, t - 14) : want;
-  G.flares.push({ sx: P.x, sy: P.y, x: P.x, y: P.y, tx: P.x + Math.cos(a) * land, ty: P.y + Math.sin(a) * land, t: 0, dur: 0.25 + land / 900, h: 0, burst: false, life: 0, max: 5.5 });
-  SFX.flareThrow();
+  // a short strike before the throw: anticipation you can see and hear
+  G.flares.push({ sx: P.x, sy: P.y, x: P.x, y: P.y, tx: P.x + Math.cos(a) * land, ty: P.y + Math.sin(a) * land, strike: 0.14, t: 0, dur: 0.25 + land / 900, h: 0, burst: false, life: 0, max: 5.5, after: 1.6 });
+  emit('flareStrike', {});
 }
 function updFlares(dt) {
   for (const f of G.flares) {
+    if (f.strike > 0) { f.strike -= dt; f.sx = f.x = G.p.x; f.sy = f.y = G.p.y; continue; }
     if (!f.burst) {
       f.t += dt; const k = Math.min(1, f.t / f.dur);
       f.x = lerp(f.sx, f.tx, k); f.y = lerp(f.sy, f.ty, k); f.h = Math.sin(k * Math.PI) * 26;
+      if (Math.random() < 0.8) addPart(f.x, f.y - f.h, '#ffb08a', 30, 0.35, 1.8);
       if (k >= 1) { f.burst = true; f.life = f.max; f.h = 0; flareBurst(f); }
-    } else {
+    } else if (f.life > 0) {
       f.life -= dt;
       if (Math.random() < 0.6) addPart(f.x + rand(-4, 4), f.y + rand(-4, 4), Math.random() < 0.5 ? '#ffe2b8' : '#ff7a4c', 60, 0.5, 2);
-    }
+    } else f.after -= dt;
   }
-  G.flares = G.flares.filter(f => !f.burst || f.life > 0);
+  G.flares = G.flares.filter(f => !f.burst || f.life > 0 || f.after > 0);
 }
 function flareBurst(f) {
-  SFX.flareBurst(); G.shake = Math.min(14, G.shake + 3);
+  G.shake = Math.min(14, G.shake + 3); G.flash = Math.max(G.flash, 0.35);
   const m = flareMul(), R1 = 150 * m, R2 = 260 * m;
+  const result = { dissolved: 0, stunned: 0, exposed: 0, verified: 0 };
   for (const h of G.hollows) {
     if (h.dead || h.emerge > 0) continue;
     const d = Math.hypot(h.x - f.x, h.y - f.y);
     if (d > R2) continue;
     if (d > 6 && ray(f.x, f.y, Math.atan2(h.y - f.y, h.x - f.x), d, false) < d - h.r) continue;
-    if (h.kind === 'hushed') { h.stun = Math.max(h.stun, 1); continue; }
-    if (d < R1) dissolve(h, 'flare'); else h.stun = Math.max(h.stun, 3);
+    if (h.kind === 'hushed') { h.stun = Math.max(h.stun, 1); result.stunned++; continue; }
+    if (d < R1) { dissolve(h, 'flare'); result.dissolved++; } else { h.stun = Math.max(h.stun, 3); result.stunned++; }
   }
   for (const s of G.signals.slice()) {
     const d = Math.hypot(s.x - f.x, s.y - f.y);
     if (d > 230) continue;
     if (d > 6 && ray(f.x, f.y, Math.atan2(s.y - f.y, s.x - f.x), d, false) < d - 8) continue;
-    if (!s.real) { revealMimic(s, 'flare'); continue; }
-    if (!s.verified) { s.verified = true; s.say = "Ah! Too bright. I'm here, I'm real!"; s.sayT = 4; s.heard = true; log(`${s.name} shielded their eyes from the flare. A real survivor.`, 'good'); }
+    if (!s.real) { revealMimic(s, 'flare'); result.exposed++; continue; }
+    if (!s.verified) { s.verified = true; s.say = "Ah! Too bright. I'm here, I'm real!"; s.sayT = 4; s.heard = true; result.verified++; log(`${s.name} shielded their eyes from the flare. A real survivor.`, 'good'); emit('verified', { s }); }
   }
+  const st = CH.exp.stats;
+  (st.flareResults = st.flareResults || []).push(result.exposed ? 'exposed a mimic' : result.verified ? 'verified a survivor' : result.dissolved || result.stunned ? 'stopped Hollows' : 'lit an empty space');
+  emit('flareBurst', { f, result });
 }
 function placeBeacon() {
   const P = G.p;
-  if (P.beacons <= 0) { log('No beacons in hand. Resupply at the Sanctuary.', 'warn'); return; }
+  if (P.beacons <= 0) { log('No beacons in hand. Resupply at the Sanctuary.', 'warn'); emit('empty', { what: 'beacon' }); return; }
   if (G.beacons.some(b => Math.hypot(b.x - P.x, b.y - P.y) < 40)) return;
   P.beacons--; CH.exp.stats.beaconsPlaced++;
-  G.beacons.push({ x: P.x, y: P.y, c: CH.crossings, lit: true, old: false });
-  SFX.beacon(); tip('beacon');
+  const b = { x: P.x + Math.cos(P.aim) * 14, y: P.y + Math.sin(P.aim) * 14, c: CH.crossings, lit: true, old: false, placedT: G.t };
+  if (wallAt(Math.floor(b.x / T), Math.floor(b.y / T))) { b.x = P.x; b.y = P.y; }
+  G.beacons.push(b);
+  const pinned = G.Z.edges.map((e, k) => k).filter(k => doorPinned(k) && !(G.Z.edges[k].a === G.Z.dockR || G.Z.edges[k].b === G.Z.dockR));
+  emit('beaconPlaced', { b, pinned });
 }
 function setLens(i, toggle) {
   const P = G.p;
   if (toggle && P.lens === i) i = 0;
   if (P.lens === i) return;
-  P.lens = i; CH.exp.stats.lensSwitches++;
-  SFX.lens(i);
-  if (i) tip('lens');
+  P.lens = i; P.lensT = G.t; CH.exp.stats.lensSwitches++;
+  emit('lens', { i });
 }
 
 /* ===================== using things ===================== */
@@ -1190,16 +1291,16 @@ function interactTarget() {
 const HOLD = { signal: 1.0, relic: 0.8, beacon: 0.5, pack: 0.4 };
 function promptFor(tg) {
   if (!tg) return null;
-  const P = G.p, key = inputMode === 'touch' ? 'USE' : inputMode === 'pad' ? 'A' : 'E';
+  const P = G.p, key = keyLabel('use');
   const full = P.carryE + P.carryS >= P.cap;
   switch (tg.kind) {
     case 'dock': return `${key}: the Sanctuary. Resupply, or walk on`;
     case 'ember': return full ? 'Pack full. Bring it to the Sanctuary' : `Hold ${key}: gather ember (${tg.it.amt} here)`;
     case 'salvage': return full ? 'Pack full. Bring it to the Sanctuary' : `Hold ${key}: strip salvage (${tg.it.amt} here)`;
     case 'relic': return `Hold ${key}: take the relic`;
-    case 'pack': return `Hold ${key}: recover your pack`;
+    case 'pack': return `Hold ${key}: recover your pack (${tg.it.e} ember, ${tg.it.s} salvage)`;
     case 'signal': return `Hold ${key}: reach out to "${tg.s.name}"${tg.s.verified ? ' (verified)' : ''}`;
-    case 'beacon': return P.beacons >= beaconCap() ? 'Beacon (your hands are full)' : `Hold ${key}: pick up the beacon`;
+    case 'beacon': return P.beacons >= beaconCap() ? 'Beacon (your hands are full)' : `Hold ${key}: pull up the beacon`;
   }
   return null;
 }
@@ -1213,14 +1314,14 @@ function updInteract(dt) {
   const room = () => P.carryE + P.carryS < P.cap;
   switch (tg.kind) {
     case 'ember':
-      while (G.use.acc >= 0.2 && tg.it.amt > 0 && room()) { G.use.acc -= 0.2; tg.it.amt--; P.carryE++; G.harvested++; SFX.harvest(); addPart(tg.it.x, tg.it.y, '#ff8a4c', 50, 0.5, 2); tip('carry'); }
+      while (G.use.acc >= 0.2 && tg.it.amt > 0 && room()) { G.use.acc -= 0.2; tg.it.amt--; P.carryE++; G.harvested++; addPart(tg.it.x, tg.it.y, '#ff8a4c', 50, 0.5, 2, 'ember'); emit('harvest', {}); }
       G.use.acc = Math.min(G.use.acc, 0.2); break;
     case 'salvage':
-      while (G.use.acc >= 0.45 && tg.it.amt > 0 && room()) { G.use.acc -= 0.45; tg.it.amt--; P.carryS++; SFX.salvage(); tip('carry'); }
+      while (G.use.acc >= 0.45 && tg.it.amt > 0 && room()) { G.use.acc -= 0.45; tg.it.amt--; P.carryS++; emit('salvage', {}); }
       G.use.acc = Math.min(G.use.acc, 0.45); break;
     case 'relic': if (G.use.t >= HOLD.relic) { tg.it.amt = 0; G.use.t = 0; takeRelic(); } break;
-    case 'pack': if (G.use.t >= HOLD.pack) { tg.it.amt = 0; P.carryE += tg.it.e; P.carryS += tg.it.s; log(`Pack recovered: ${tg.it.e} ember, ${tg.it.s} salvage.`, 'good'); SFX.bank(); G.use.t = 0; } break;
-    case 'beacon': if (G.use.t >= HOLD.beacon && P.beacons < beaconCap()) { G.beacons = G.beacons.filter(b => b !== tg.b); P.beacons++; SFX.click(); G.use.t = 0; } break;
+    case 'pack': if (G.use.t >= HOLD.pack) { tg.it.amt = 0; P.carryE += tg.it.e; P.carryS += tg.it.s; CH.exp.stats.packRecovered = (CH.exp.stats.packRecovered || 0) + 1; log(`Pack recovered: ${tg.it.e} ember, ${tg.it.s} salvage.`, 'good'); emit('packRecovered', {}); G.use.t = 0; } break;
+    case 'beacon': if (G.use.t >= HOLD.beacon && P.beacons < beaconCap()) { G.beacons = G.beacons.filter(b => b !== tg.b); P.beacons++; emit('beaconLifted', {}); G.use.t = 0; } break;
     case 'signal': if (G.use.t >= HOLD.signal) { G.use.t = 0; CH.exp.stats.decisions++; if (tg.s.real) rescue(tg.s); else revealMimic(tg.s, 'touch'); } break;
   }
   G.items = G.items.filter(it => it.amt > 0);
@@ -1229,14 +1330,15 @@ function bank() {
   const P = G.p, ex = CH.exp;
   ex.ember += P.carryE; ex.salvage += P.carryS;
   log(`Banked ${P.carryE} ember and ${P.carryS} salvage.`, 'good');
-  P.carryE = P.carryS = 0; SFX.bank(); tip('dock');
+  emit('bank', { e: P.carryE, s: P.carryS });
+  P.carryE = P.carryS = 0;
 }
 function takeRelic() {
   if (CH.fragments.length >= 7) { log('The relic is blank. Whatever it held has already been read.', 'warn'); return; }
   const idx = CH.fragments.length;
   CH.fragments.push(idx); CH.exp.stats.relics++;
   record('relic', `Found "${FRAGMENTS[idx].title}" in ${G.node.name}.`, G.node.name);
-  SFX.relic();
+  emit('relic', { idx });
   openRead(idx);
 }
 
@@ -1244,10 +1346,11 @@ function takeRelic() {
 function rotateToward(a, b, k) { return a + angDiff(b, a) * k; }
 function readAim() {
   const P = G.p, moving = Math.hypot(P.vx, P.vy) > 20;
+  if (G.debugAim != null) { P.aim = G.debugAim; P.focus = !!G.debugFocus; G.aimX = P.x + Math.cos(P.aim) * 240; G.aimY = P.y + Math.sin(P.aim) * 240; return; }   // tests only
   if (inputMode === 'mouse' && mouse.seen) {
     G.aimX = G.cam.x + (mouse.x - W / 2) / G.zoom; G.aimY = G.cam.y + (mouse.y - H / 2) / G.zoom;
     P.aim = Math.atan2(G.aimY - P.y, G.aimX - P.x);
-    P.focus = mouse.left || keys.has('shift');
+    P.focus = mouse.left || actionHeld('focus');
     return;
   }
   if (inputMode === 'pad') {
@@ -1259,7 +1362,7 @@ function readAim() {
     P.focus = a.m > 0.9;
   } else {
     if (moving) P.aim = rotateToward(P.aim, Math.atan2(P.vy, P.vx), 0.2);
-    P.focus = keys.has('shift');
+    P.focus = actionHeld('focus');
   }
   G.aimX = P.x + Math.cos(P.aim) * 240; G.aimY = P.y + Math.sin(P.aim) * 240;
 }
@@ -1267,7 +1370,7 @@ function update(dt) {
   const P = G.p, Z = G.Z, ex = CH.exp;
   G.t += dt; ex.stats.time += dt; ex.stats.lensTime[P.lens] += dt;
   const beat = G.t % 1;
-  if (beat < G.lastBeat) SFX.heart(0.05 + 0.12 * (1 - clamp(dist(P, G.sanct) / 700, 0, 1)));
+  if (beat < G.lastBeat) emit('heartbeat', { d: dist(P, G.sanct) });
   G.lastBeat = beat;
 
   if (G.fallT > 0) {
@@ -1280,10 +1383,19 @@ function update(dt) {
     const mv = moveInput();
     readAim();
     const spd = 150 * (1 + 0.1 * traitN('runner')) * (P.focus ? 0.7 : 1);
-    const k = Math.min(1, dt * 12);
+    const accel = Math.hypot(mv.x, mv.y) > 0.1 ? 14 : 18;   // quick to start, quicker to stop
+    const k = 1 - Math.exp(-dt * accel);
     P.vx += (mv.x * spd - P.vx) * k; P.vy += (mv.y * spd - P.vy) * k;
-    moveCircle(P, P.vx * dt, P.vy * dt, P.r);
+    const bx = P.x, by = P.y;
+    const hitWall = moveCircle(P, P.vx * dt, P.vy * dt, P.r);
     pushFromSanct(P);
+    const moved = Math.hypot(P.x - bx, P.y - by);
+    P.walk += moved;
+    if (hitWall && Math.hypot(P.vx, P.vy) > 100 && G.t - (P.bumpT || 0) > 0.4) { P.bumpT = G.t; emit('bump', {}); }
+    if (moved > 0.5 || press.use || press.flare || press.beacon || press.lensNext || press.lensSet >= 0 || mouse.left) {
+      if (G.t - G.lastInput > 20) { (ex.stats.idle = ex.stats.idle || []).push({ zone: G.node.name, at: Math.round(G.lastInput), s: Math.round(G.t - G.lastInput) }); }
+      G.lastInput = G.t;
+    }
     const lt = G.trail[G.trail.length - 1];
     if (!lt || Math.hypot(P.x - lt.x, P.y - lt.y) > 14) { G.trail.push({ x: P.x, y: P.y }); if (G.trail.length > 240) G.trail.shift(); }
     if (press.lensNext) setLens((P.lens + 1) % 4, false);
@@ -1295,20 +1407,24 @@ function update(dt) {
   P.hurtT = Math.max(0, P.hurtT - dt);
 
   buildLights();
+  for (const it of G.items) { it.vis = litInfo(it.x, it.y, 8).seen; if (it.vis) it.seen = true; }
+  guideLensTime(dt);
 
   if (!S.ablate.shift) {
+    const early = G.teach && G.t < 70;
     G.shiftT -= dt * S.shift * (1 + G.dim * 1.3);
-    if (G.shiftT <= 0) { G.shiftT = rand(2.2, 4.2); tryShift(); if (Math.random() < 0.5) tryShift(); }
+    if (G.shiftT <= 0) { G.shiftT = early ? rand(1.4, 2.4) : rand(2.2, 4.2); tryShift(early ? { near: true } : null); if (!early && Math.random() < 0.5) tryShift(); }
   }
   if (P.lens === 3) { G.surveyT -= dt; if (G.surveyT <= 0) { G.surveyT = 0.25; surveyScan(); } }
 
-  G.dimRate = (1 + (Z.depth - 1) * 0.1) / 210 * paceMul();
+  G.dimRate = (1 + (Z.depth - 1) * 0.1) / 210 * paceMul() * (G.teach ? 0.8 : 1);
   G.dim = Math.min(1, G.dim + G.dimRate * dt);
-  if (G.dim >= 0.5 && !G.dimTipped) { G.dimTipped = true; tip('dim'); }
+  if (G.dim >= 0.5 && !G.dimTipped) { G.dimTipped = true; emit('dimHalf', {}); }
   if (G.dim >= 1 && !G.blackout) {
-    G.blackout = true; SFX.blackout();
+    G.blackout = true;
     log('Blackout. The Hollows are pouring in. Get back to the Sanctuary.', 'bad');
     G.banner = { text: 'Blackout', sub: 'Return to the Sanctuary', t: 3, max: 3, col: '#ff6a74' };
+    emit('blackout', {});
   }
   G.spawnT -= dt;
   if (G.spawnT <= 0) {
@@ -1329,15 +1445,23 @@ function update(dt) {
       P.warmth = Math.min(P.maxW, P.warmth + 40 * dt);
     } else if (G.beacons.some(b => b.lit && Math.hypot(P.x - b.x, P.y - b.y) < 150)) P.warmth = Math.min(P.maxW, P.warmth + 2 * dt);
   }
-  for (const q of G.parts) { q.life -= dt; q.x += q.vx * dt; q.y += q.vy * dt; q.vx *= 0.96; q.vy *= 0.96; }
+  G.homeT -= dt;
+  if (G.homeT <= 0) { G.homeT = 0.5; G.homeSteps = homeDist(); }
+  const drag = Math.exp(-dt * 2.4);
+  for (const q of G.parts) { q.life -= dt; q.x += q.vx * dt; q.y += q.vy * dt; q.vx *= drag; q.vy *= drag; if (q.kind === 'dust') q.vy += 6 * dt; }
   G.parts = G.parts.filter(q => q.life > 0);
+  for (const r of G.rings) r.t += dt;
+  G.rings = G.rings.filter(r => r.t < r.life);
   for (const m of G.moved) m.t -= dt;
   G.moved = G.moved.filter(m => m.t > 0);
+  G.residue = G.residue.filter(r => G.t - r.t < 40);
   for (const l of G.logs) l.t += dt;
   G.logs = G.logs.filter(l => l.t < 10);
   if (G.banner) { G.banner.t -= dt; if (G.banner.t <= 0) G.banner = null; }
+  if (G.reveal) { G.reveal.t += dt; if (G.reveal.t > 2.5) G.reveal = null; }
   G.flicker = Math.max(0, G.flicker - dt);
   G.hurtFlash = Math.max(0, G.hurtFlash - dt);
+  G.flash = Math.max(0, G.flash - dt * 2);
   updCamera(dt);
 }
 
@@ -1366,6 +1490,7 @@ function depart() {
     if (!S.ablate.persist && !z.lostVoices.includes(name)) { z.lostVoices.push(name); if (z.lostVoices.length > 3) z.lostVoices.shift(); }
     record('abandon', `You left ${name} behind in ${z.name}.`, z.name);
   }
+  if (G.items.some(i => i.kind === 'pack')) ex.stats.packsAbandoned = (ex.stats.packsAbandoned || 0) + 1;
   if (!S.ablate.persist) {
     const frac = G.Z.totalE ? Math.min(1, G.harvested / G.Z.totalE) : 0;
     z.richness = clamp(z.richness * (1 - 0.8 * frac), 0.15, 1);
@@ -1380,8 +1505,8 @@ function depart() {
   evaluateAdaptation();
   record('depart', `Left ${z.name} after ${fmtTime(G.t)} with ${G.harvested} ember gathered${G.blackout ? ', in blackout' : ''}.`, z.name);
   ex.inZone = null;
+  emit('depart', {});
   G = null;
-  SFX.depart();
   showRoute();
 }
 
@@ -1413,6 +1538,22 @@ function wrap(text, maxW) {
 }
 
 /* ===================== the place ===================== */
+function wallTile(g, x, y, fill, cap) {
+  g.fillStyle = fill; g.fillRect(x * T, y * T, T, T);
+  g.fillStyle = cap; g.fillRect(x * T, y * T, T, 5);
+  g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(x * T, y * T + T - 4, T, 4);
+}
+function paintFloor(Z) {
+  const B = BIOMES[Z.z.biome], c = document.createElement('canvas');
+  c.width = Z.GW * T; c.height = Z.GH * T;
+  const g = c.getContext('2d');
+  g.fillStyle = B.floor; g.fillRect(0, 0, c.width, c.height);
+  const rng = mulberry32(Z.z.seed ^ 0x5bd1e995);
+  g.strokeStyle = B.grid; g.lineWidth = 1;
+  for (let y = 0; y < Z.GH; y++) for (let x = 0; x < Z.GW; x++) { g.fillStyle = `rgba(255,255,255,${(rng() * 0.03).toFixed(3)})`; g.fillRect(x * T, y * T, T, T); g.strokeRect(x * T + 0.5, y * T + 0.5, T - 1, T - 1); }
+  for (let y = 0; y < Z.GH; y++) for (let x = 0; x < Z.GW; x++) { const k = x + y * Z.GW; if (Z.wall[k] && Z.doorTile[k] < 0) wallTile(g, x, y, B.wall, B.cap); }
+  return c;
+}
 function renderZone(dt) {
   const Z = G.Z, P = G.p, B = BIOMES[Z.z.biome];
   let shx = 0, shy = 0;
@@ -1423,13 +1564,13 @@ function renderZone(dt) {
   ctx.fillStyle = '#04050a'; ctx.fillRect(0, 0, W, H);
   worldT();
   ctx.drawImage(G.floor, 0, 0);
-  for (const e of Z.edges) if (!e.open) for (const [x, y] of e.tiles) wallTile(ctx, x, y, B.door, B.cap);
-  for (const it of G.items) drawItem(it);
+  Z.edges.forEach((e, k) => { if (!e.open && G.t - G.doorSeenT[k] < 0.05) for (const [x, y] of e.tiles) wallTile(ctx, x, y, B.door, B.cap); });   // true doorway state only where lit
+  for (const it of G.items) if (it.vis) drawItem(it);
   for (const b of G.beacons) drawBeaconPost(b);
   drawSanctuary();
-  for (const s of G.signals) drawFigure(s, false);
+  for (const s of G.signals) if (s.vis) drawFigure(s, false);
   for (const e of G.escorts) drawFigure(e, true);
-  for (const h of G.hollows) if (h.emerge <= 0) drawHollow(h);
+  for (const h of G.hollows) if (h.emerge <= 0 && h.vis) drawHollow(h);
   for (const f of G.flares) { ctx.fillStyle = f.burst ? '#ffe9cf' : '#ff9a6a'; ctx.beginPath(); ctx.arc(f.x, f.y - f.h, f.burst ? 4 : 3, 0, TAU); ctx.fill(); }
   if (!(G.fallT > 0 && G.fallT < 1.0)) drawPlayer();
   drawDark();
@@ -1558,8 +1699,7 @@ function drawPlayer() {
 function drawGlows() {
   const t = G.t;
   for (const it of G.items) {
-    if (it.kind !== 'ember' && it.kind !== 'relic') continue;
-    if (!litInfo(it.x, it.y, 6).seen) continue;
+    if ((it.kind !== 'ember' && it.kind !== 'relic') || !it.vis) continue;
     glowDot(it.x, it.y, it.kind === 'relic' ? 24 : 12 + 4 * Math.sin(t * 2 + it.x), it.kind === 'relic' ? '169,193,255' : '255,138,76', 0.35);
   }
   for (const b of G.beacons) if (b.lit) glowDot(b.x, b.y - 14, 18, '255,210,140', 0.6);
@@ -1603,7 +1743,7 @@ function drawEyes() {   // you can sense eyes nearby even in the dark
   for (const h of G.hollows) {
     if (h.emerge > 0) continue;
     const d = Math.hypot(h.x - P.x, h.y - P.y);
-    if (d < 260) eyes(h, (1 - d / 260) * 0.85);
+    if (d < 260 && !h.vis && losFromPlayer(h.x, h.y)) eyes(h, (1 - d / 260) * 0.85);   // no eyes through walls
   }
 }
 
@@ -1862,6 +2002,155 @@ function renderBackdrop(t) {
   ctx.globalCompositeOperation = 'source-over';
 }
 
+/* ===================== guidance: short, contextual, answers what the player actually did ===================== */
+const GS = { cur: null, t0: 0, ack: null, ackT: 0, cool: {}, tries: {}, html: '' };
+let GF = { lensT: {}, clueQ: [], caught: 0 };   // what happened in this place, as observed by the guide
+function gdone(id) { return !!(CH && CH.tips[id]); }
+function markDone(id) { if (CH) CH.tips[id] = 1; }
+function since() { return G.t - GS.t0; }
+function beatDefs() {
+  const P = G.p;
+  return [
+    { id: 'carried', repeat: true, urgent: true, when: () => GF.carried && !GF.carriedShown, title: 'Carried home',
+      text: () => `${esc(GF.carried.crew.name)} carried you back, and carries a scar for it. ${GF.carried.pack ? 'Your pack lies where you fell, marked on your map. Going back for it is a gamble against the dark.' : 'The dark has thickened.'}`,
+      done: () => GF.packRecovered || since() > 11, mark: () => GF.carried.pack ? { x: GF.carried.fx, y: GF.carried.fy, kind: 'pack' } : null, onShow: () => { GF.carriedShown = true; } },
+    { id: 'move', when: () => G.t > 0.8, title: 'Carry the light', text: () => `${moveLabel()} to move. Aim your lantern with ${aimLabel()}.`, done: () => P.walk > 220 },
+    { id: 'hollow', when: () => GF.hollowSeen, title: 'A Hollow',
+      text: () => `It moves only in darkness. Keep your light on it and it stops. Hold ${keyLabel('focus')} to focus the lantern and burn it away.`,
+      done: () => (GF.caught >= 1 && since() > 3) || since() > 20, mark: () => GF.hollow && !GF.hollow.dead ? { x: GF.hollow.x, y: GF.hollow.y, kind: 'hollow' } : null, ack: 'Light holds them. Darkness frees them.' },
+    { id: 'door', urgent: true, when: () => !!GF.door, title: 'The city moved',
+      text: () => (GF.door.manip ? 'You looked away, and the doorway changed.' : 'This doorway changed while no light was on it.') + ' The city rearranges only where no light falls.' + (GF.door.homeBroken ? ' Your remembered way home is broken.' : ''),
+      done: () => since() > 8, mark: () => ({ ...doorCenter(GF.door.k), kind: 'door' }) },
+    { id: 'door-hint', when: () => !gdone('door') && G.t > 45 && !GF.door, title: 'Watch a doorway', text: () => 'Light a doorway, turn your lantern away from it for a few seconds, then look back.', done: () => !!GF.door, max: 20 },
+    { id: 'voice', when: () => !!GF.voice, title: 'A voice',
+      text: () => `Some voices are survivors; some are mimics. Test before you trust: press ${lensLabel(2)} for the Echo lens and compare its pulse with the Sanctuary's heartbeat, or throw a flare (${keyLabel('flare')}) near it.`,
+      done: () => GF.clueQ.length > 0 || GF.clueSeen || GF.flare || GF.reveal || GF.rescued, mark: () => GF.voice && G.signals.includes(GF.voice) ? { x: (GF.voice.lastSeen || GF.voice.heardPos || GF.voice).x, y: (GF.voice.lastSeen || GF.voice.heardPos || GF.voice).y, kind: 'voice' } : null, max: 35 },
+    { id: 'clue', repeat: true, when: () => GF.clueQ.length > 0 && (CH.tips.clueN || 0) < 4, title: 'Noted in your ledger',
+      text: () => { const c = GF.clueQ[0]; return c.kind === 'moved' ? `"${esc(c.s.name)}" moved while no one watched. Survivors stay hidden where they are.` : c.value === 'off' ? `"${esc(c.s.name)}" pulses off the Sanctuary's heartbeat. Real survivors breathe in time with it.` : `"${esc(c.s.name)}" breathes in time with the Sanctuary's heartbeat.`; },
+      done: () => since() > 7, mark: () => { const s = GF.clueQ[0] && GF.clueQ[0].s; return s && G.signals.includes(s) ? { x: s.x, y: s.y, kind: 'voice' } : null; },
+      onShow: () => { CH.tips.clueN = (CH.tips.clueN || 0) + 1; GF.clueSeen = true; }, onDone: () => GF.clueQ.shift() },
+    { id: 'beacon', when: () => roomGridDist(roomAt(P.x, P.y), G.Z.dockR) >= 2 && P.beacons > 0 && !GF.beaconPlaced && (gdone('door') || G.t > 40), title: 'Pin the way home',
+      text: () => `Doorways between you and the Sanctuary can change behind you. Press ${keyLabel('beacon')} to plant a beacon: the doorways of its room, and any within reach, stay put.`,
+      done: () => GF.beaconPlaced, mark: () => ({ x: P.x, y: P.y, r: PIN_R, kind: 'pin' }), max: 25 },
+    { id: 'carry', when: () => P.carryE + P.carryS >= 8, title: 'Only the Sanctuary is safe', text: () => 'What you carry drops where you fall. Walk into the Sanctuary\'s light to bank it.', done: () => GF.banked, mark: () => ({ x: G.sanct.x, y: G.sanct.y, kind: 'home' }), max: 25 },
+    { id: 'dock', when: () => GF.banked && !GF.docked, title: 'Stay, or walk on', text: () => `Press ${keyLabel('use')} at the Sanctuary to see what leaving would cost and what staying risks.`, done: () => GF.docked, mark: () => ({ x: G.sanct.x, y: G.sanct.y, kind: 'home' }), max: 20 },
+    { id: 'escort', when: () => GF.rescued, title: 'Lead them home', text: () => 'They follow your footsteps. A Hollow\'s touch shakes them; a second takes them. Bring them into the Sanctuary\'s light.', done: () => GF.joined || since() > 12 },
+    { id: 'mimic', urgent: true, when: () => !!GF.reveal, title: 'A mimic', text: () => 'Mimics pulse off the heartbeat, drift when unwatched, repeat their words, and flinch from flares.', done: () => since() > 9 },
+    { id: 'dim', when: () => GF.dim, title: 'The dark thickens', text: () => 'Each minute here, less remains and more hunts. Leave when what is left is worth less than what lies ahead.', done: () => since() > 9 },
+    { id: 'lens-ember', when: () => (G.node.col >= 2 || CH.crossings > 1) && G.t > 6, title: 'The Ember lens', text: () => `Press ${lensLabel(1)}: the ember still in the walls, and how much richer the far rooms are. Your lantern shrinks while any lens is up.`, done: () => (GF.lensT[1] || 0) > 1.5, max: 25 },
+    { id: 'lens-survey', when: () => gdone('door') && (G.node.col >= 2 || CH.crossings > 1) && G.t > 20, title: 'The Survey lens', text: () => `Press ${lensLabel(3)}: the true doorways near you, including any that changed since you looked. Knowing does not hold them still.`, done: () => (GF.lensT[3] || 0) > 1.5, max: 25 },
+    ...Object.keys(ADAPT).map(k => ({ id: 'adapt-' + k, when: () => G.hollows.some(h => h.kind === k && h.vis), title: ADAPT[k].name,
+      text: () => `They answer your ${ADAPT[k].tactic}. Look for ${ADAPT[k].sign}. ${ADAPT[k].rule}`, done: () => since() > 10, mark: () => { const h = G.hollows.find(h => h.kind === k && h.vis); return h ? { x: h.x, y: h.y, kind: 'hollow' } : null; } }))
+  ];
+}
+function guideState() { return { cur: GS.cur && GS.cur.id, ack: GS.ack, done: Object.keys(CH ? CH.tips : {}) }; }
+function guideTick(dt) {
+  const el = $('guide');
+  if (state !== 'zone' || !G) { el.hidden = true; return; }
+  if (GS.cur) {
+    const b = GS.cur;
+    if (b.done()) {
+      if (!b.repeat) markDone(b.id);
+      if (b.onDone) b.onDone();
+      if (b.ack) { GS.ack = b.ack; GS.ackT = G.t + 3; }
+      GS.cur = null;
+    } else if (b.max && since() > b.max) {
+      GS.cool[b.id] = G.t + 40; GS.tries[b.id] = (GS.tries[b.id] || 0) + 1;
+      if (GS.tries[b.id] >= 2) markDone(b.id);   // stop repeating advice the player chose not to take
+      GS.cur = null;
+    }
+  }
+  if (GS.ack && G.t > GS.ackT) GS.ack = null;
+  if (GS.cur && !GS.cur.urgent) {   // a changed situation outranks an older lesson; the lesson returns later
+    const u = beatDefs().find(b => b.urgent && !(!b.repeat && gdone(b.id)) && b.when());
+    if (u) { GS.cool[GS.cur.id] = G.t + 8; GS.cur = null; GS.ack = null; }
+  }
+  if (!GS.cur && !GS.ack) {
+    for (const b of beatDefs()) {
+      if ((!b.repeat && gdone(b.id)) || (GS.cool[b.id] || 0) > G.t) continue;
+      if (b.when()) { GS.cur = b; GS.t0 = G.t; if (b.onShow) b.onShow(); break; }
+    }
+  }
+  G.guideMark = GS.cur && GS.cur.mark ? GS.cur.mark() : null;
+  G.guideSlow = GS.cur && GS.cur.id === 'hollow' && since() < 2.5 ? 0.3 : 1;   // the first Hollow waits while you read
+  const html = GS.cur ? `<b>${GS.cur.title}</b><p>${GS.cur.text()}</p>` : GS.ack ? `<p class="ack">${GS.ack}</p>` : '';
+  if (html !== GS.html) { GS.html = html; el.innerHTML = html; }
+  el.hidden = !html;
+}
+on((type, d) => {
+  switch (type) {
+    case 'enterZone': GF = { lensT: {}, clueQ: [], caught: 0 }; GS.cur = null; GS.ack = null; GS.html = ''; break;
+    case 'hollowSeen': if (!GF.hollowSeen) { GF.hollowSeen = true; GF.hollow = d.h; } break;
+    case 'freeze': if (d.by === 'lantern') GF.caught++; break;
+    case 'dissolve': if (d.how === 'lantern') GF.caught++; break;
+    case 'doorDiscovered': if (!GF.door) GF.door = d; break;
+    case 'beaconPlaced': GF.beaconPlaced = true; if (!gdone('beacon')) { markDone('beacon'); if (!GS.cur || GS.cur.id === 'beacon') { GS.cur = null; GS.ack = 'Pinned. Doorways near the beacon hold while it burns.'; GS.ackT = G.t + 3.5; } } break;
+    case 'voice': if (!GF.voice) GF.voice = d.s; break;
+    case 'clue': GF.clueQ.push(d); break;
+    case 'flareBurst': GF.flare = d.result; break;
+    case 'bank': GF.banked = true; break;
+    case 'dockOpen': GF.docked = true; break;
+    case 'rescue': GF.rescued = true; break;
+    case 'joined': GF.joined = true; break;
+    case 'mimicReveal': GF.reveal = d; break;
+    case 'carried': GF.carried = { crew: d.crew, fx: d.fx, fy: d.fy, pack: G.items.some(i => i.kind === 'pack') }; GF.carriedShown = false; break;
+    case 'packRecovered': GF.packRecovered = true; break;
+    case 'dimHalf': GF.dim = true; break;
+    case 'lens': GF.lensAt = { i: d.i, t: G.t }; break;
+  }
+});
+function guideLensTime(dt) { if (G && G.p.lens) GF.lensT[G.p.lens] = (GF.lensT[G.p.lens] || 0) + dt; }
+
+/* The Field Guide: everything the guidance teaches, available any time */
+const HELP = [
+  ['Carry the light', 'Move, and aim your lantern. Light is your tool, not just your sight.'],
+  ['The city moves', 'A doorway can open or close only while no light touches it. Your map shows what you last saw, and can be wrong. Look away from a doorway to gamble on it changing, but settling stone can wake something nearby, and a doorway that just changed stays put for a while.'],
+  ['Hollows', 'They move only in darkness. Lantern, beacon, flare and Sanctuary light hold them still. A focused lantern burns them. They come from where you are not looking.'],
+  ['Beacons', 'A beacon pins the doorways of its room and any within reach, stops Hollows, and keeps burning here for your next two crossings. It does not come with you.'],
+  ['Flares', 'A flare stops or burns Hollows around it, makes real survivors shield their eyes, and forces mimics to show themselves.'],
+  ['Voices', 'Survivors breathe in time with the Sanctuary\'s heartbeat and stay put. Mimics pulse off-beat, drift while unwatched, and repeat their words. What you notice is noted in your ledger under the figure.'],
+  ['Lenses', 'Ember shows yield through walls. Echo shows Hollows and the pulse of voices. Survey shows true doorways near you. Any lens shrinks your lantern.'],
+  ['Only the Sanctuary is safe', 'What you carry is banked in the Sanctuary\'s light. If you fall, your pack stays where you fell and a crew member is scarred carrying you home.'],
+  ['Stay, or walk on', 'At the Sanctuary you see what leaving keeps, what it costs, what staying risks, and what deeper rooms might hold. Time stands still while you decide.'],
+  ['Adaptation', 'Lean on one tactic and the Hollows change to answer it, each with a visible sign and a stated counter. Vary your tactics and it fades.']
+];
+let helpFrom = 'title';
+function openHelp(from) { helpFrom = from; if (from === 'zone') { if (state !== 'zone') return; state = 'help'; clearHeld(); } else state = 'help'; renderHelp(); showScreen('scrHelp'); }
+function renderHelp() {
+  const ctl = [['Move', moveLabel()], ['Aim', aimLabel()], ['Focus and burn', keyLabel('focus')], ['Flare', keyLabel('flare') + (inputMode === 'mouse' ? ' or right click' : '')], ['Beacon', keyLabel('beacon')], ['Use, hold to gather', keyLabel('use')], ['Lenses', inputMode === 'mouse' ? '1 2 3 4, or ' + keyLabel('lens') + ' to cycle' : keyLabel('lens')], ['Field guide', keyLabel('help')], ['Pause', inputMode === 'pad' ? 'Start' : 'Esc']];
+  $('helpPanel').innerHTML = `<div><p class="eyebrow">Field guide</p><h2>How the city works</h2></div>
+    <ul class="list">${HELP.map(([t, x]) => `<li><b>${t}</b><p>${x}</p></li>`).join('')}</ul>
+    <section class="card-surface"><h3>Controls</h3><dl class="kv">${ctl.map(([a, b]) => `<dt>${a}</dt><dd>${esc(b)}</dd>`).join('')}</dl><p class="muted">Keys can be changed in Settings.</p></section>
+    <div class="btn-row"><button class="btn" id="helpBack" type="button">Back</button></div>`;
+}
+function helpBack() { if (helpFrom === 'zone') { state = 'zone'; showScreen(null); } else if (helpFrom === 'pause') { state = 'pause'; renderPause(); showScreen('scrPause'); } else showTitle(); }
+
+/* temporary bridge from events to the existing sound effects (replaced by the adaptive audio director) */
+on((type, d) => {
+  switch (type) {
+    case 'doorChanged': if (d.near) SFX.grind(clamp(d.dx / 500, -1, 1)); break;
+    case 'burning': SFX.burn(); break;
+    case 'dissolve': SFX.dissolve(0); break;
+    case 'hurt': case 'shaken': SFX.hurt(); break;
+    case 'taken': SFX.shriek(); break;
+    case 'mimicReveal': SFX.shriek(); if (G) { G.flicker = 1; G.shake = Math.min(14, G.shake + 6); } break;
+    case 'rescue': case 'joined': SFX.rescue(); break;
+    case 'pulse': SFX.chime(d.s.real, d.pan, 0.045 * (1 - d.d / 280)); break;
+    case 'flareStrike': SFX.flareThrow(); break;
+    case 'flareBurst': SFX.flareBurst(); break;
+    case 'beaconPlaced': SFX.beacon(); break;
+    case 'lens': SFX.lens(d.i); break;
+    case 'harvest': SFX.harvest(); break;
+    case 'salvage': SFX.salvage(); break;
+    case 'bank': case 'packRecovered': SFX.bank(); break;
+    case 'relic': SFX.relic(); break;
+    case 'depart': SFX.depart(); break;
+    case 'blackout': SFX.blackout(); break;
+    case 'heartbeat': SFX.heart(0.05 + 0.12 * (1 - clamp(d.d / 700, 0, 1))); break;
+    case 'beaconLifted': case 'dockOpen': SFX.click(); break;
+  }
+});
+
 /* ===================== input ===================== */
 const keys = new Set();
 const mouse = { x: 0, y: 0, left: false, seen: false };
@@ -1887,34 +2176,52 @@ function stickVec(s, radius) {
   const n = Math.hypot(dx, dy);
   return n > 0.01 ? { x: dx / n * m, y: dy / n * m, m } : { x: 0, y: 0, m: 0 };
 }
+const FIXED = { up: ['arrowup'], down: ['arrowdown'], left: ['arrowleft'], right: ['arrowright'], use: [' '], lens: ['tab'], pause: ['escape', 'p'] };
+function actionKeys(a) { return (S.keys[a] ? [S.keys[a]] : []).concat(FIXED[a] || []); }
+function actionHeld(a) { return actionKeys(a).some(k => keys.has(k)); }
+function keyName(k) { return k === ' ' ? 'Space' : k === 'shift' ? 'Shift' : k.length === 1 ? k.toUpperCase() : k[0].toUpperCase() + k.slice(1); }
+function keyLabel(a) {   // what to press, in the player's current input mode
+  const pad = { use: 'A', flare: 'B', beacon: 'X', lens: 'Y', focus: 'RT', help: 'Back' }, touch = { use: 'USE', flare: 'FLARE', beacon: 'BEACON', lens: 'LENS', focus: 'push the aim stick fully' };
+  if (inputMode === 'pad') return pad[a] || a;
+  if (inputMode === 'touch') return touch[a] || a;
+  if (a === 'focus') return mouse.seen ? 'left click' : keyName(S.keys.focus);
+  return keyName(S.keys[a] || a);
+}
+function moveLabel() { return inputMode === 'pad' ? 'The left stick' : inputMode === 'touch' ? 'Drag on the left side' : ['up', 'left', 'down', 'right'].map(a => keyName(S.keys[a])).join(' '); }
+function aimLabel() { return inputMode === 'pad' ? 'the right stick' : inputMode === 'touch' ? 'drag on the right side' : mouse.seen ? 'the mouse' : 'your movement'; }
+function lensLabel(i) { return inputMode === 'mouse' ? String(i + 1) : inputMode === 'pad' ? 'Y' : 'LENS'; }
 function moveInput() {
   let x = 0, y = 0;
-  if (keys.has('a') || keys.has('arrowleft')) x -= 1;
-  if (keys.has('d') || keys.has('arrowright')) x += 1;
-  if (keys.has('w') || keys.has('arrowup')) y -= 1;
-  if (keys.has('s') || keys.has('arrowdown')) y += 1;
+  if (actionHeld('left')) x -= 1;
+  if (actionHeld('right')) x += 1;
+  if (actionHeld('up')) y -= 1;
+  if (actionHeld('down')) y += 1;
   const t = stickVec(sticks.move, 56);
   x += t.x + pad.lx; y += t.y + pad.ly;
   const m = Math.hypot(x, y);
   if (m > 1) { x /= m; y /= m; }
   return { x, y };
 }
+let rebinding = null;
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
+  if (rebinding) { e.preventDefault(); if (k !== 'escape') { for (const a in S.keys) if (S.keys[a] === k) S.keys[a] = S.keys[rebinding]; S.keys[rebinding] = k; saveSettings(); } rebinding = null; renderSettings(); return; }
   if (state === 'zone' && [' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'tab'].includes(k)) e.preventDefault();
   if (inputMode !== 'mouse') setMode('mouse');
   keys.add(k);
   if (e.repeat) return;
+  const is = a => actionKeys(a).includes(k);
   if (state === 'zone') {
-    if (k === 'e' || k === ' ') { useHeld = true; press.use = true; }
-    else if (k === 'f') press.flare = true;
-    else if (k === 'b' || k === 'r') press.beacon = true;
-    else if (k === 'q' || k === 'tab') press.lensNext = true;
+    if (is('use')) { useHeld = true; press.use = true; }
+    else if (is('flare')) press.flare = true;
+    else if (is('beacon')) press.beacon = true;
+    else if (is('lens')) press.lensNext = true;
     else if (k >= '1' && k <= '4') press.lensSet = +k - 1;
-    else if (k === 'escape' || k === 'p') openPause();
+    else if (is('help')) openHelp('zone');
+    else if (is('pause')) openPause();
   } else if (k === 'escape') menuBack();
 });
-window.addEventListener('keyup', e => { const k = e.key.toLowerCase(); keys.delete(k); if (k === 'e' || k === ' ') useHeld = false; });
+window.addEventListener('keyup', e => { const k = e.key.toLowerCase(); keys.delete(k); if (actionKeys('use').includes(k)) useHeld = false; });
 cv.addEventListener('contextmenu', e => e.preventDefault());
 cv.addEventListener('pointerdown', e => {
   const tab = state === 'zone' ? lensTabHit(e.clientX, e.clientY) : -1;
@@ -2011,6 +2318,7 @@ function menuBack() {
   else if (state === 'read') closeRead();
   else if (state === 'settings') settingsBack();
   else if (state === 'chron') chronBack();
+  else if (state === 'help') helpBack();
 }
 function chipFor(k) { const [c, l] = KIND[k] || ['', k]; return `<span class="chip ${c}">${l}</span>`; }
 
@@ -2024,6 +2332,7 @@ function showTitle() {
   if (CH && CH.exp) btns.push('<button class="btn" id="btnContinue" type="button">Continue the crossing</button>');
   else btns.push(`<button class="btn" id="btnBegin" type="button">${CH && CH.crossings ? 'Begin the next crossing' : 'Begin'}</button>`);
   if (CH) btns.push('<button class="btn ghost" id="btnChron" type="button">Chronicle</button>');
+  btns.push('<button class="btn ghost" id="btnHelp" type="button">Field guide</button>');
   btns.push('<button class="btn ghost" id="btnSettings" type="button">Settings</button>');
   $('titleBtns').innerHTML = btns.join('');
   showScreen('scrTitle');
@@ -2124,45 +2433,41 @@ function travel(id) {
 function openDock() { state = 'dock'; clearHeld(); renderDock(); showScreen('scrDock'); }
 function closeDock() { state = 'zone'; showScreen(null); }
 function renderDock() {
-  const P = G.p, ex = CH.exp, Z = G.Z;
-  const left = G.items.filter(i => i.kind === 'ember').reduce((s, i) => s + i.amt, 0);
-  const pct = Z.totalE ? Math.round(left / Z.totalE * 100) : 0;
+  const P = G.p, ex = CH.exp, Z = G.Z, z = Z.z;
+  const embers = G.items.filter(i => i.kind === 'ember'), left = embers.reduce((s, i) => s + i.amt, 0);
+  const rooms = roomTotals(), richest = Math.max(0, ...rooms);
   const costs = G.node.next.map(id => travelCost(nodeById(id).col)), lo = Math.min(...costs), hi = Math.max(...costs);
   const heard = G.signals.filter(s => s.heard), unheard = G.signals.length - heard.length;
-  const lit = G.beacons.filter(b => b.lit).length;
+  const lit = G.beacons.filter(b => b.lit).length, moving = G.hollows.filter(h => h.emerge <= 0).length;
+  const relicSeen = G.items.some(i => i.kind === 'relic' && i.seen);
   const Tc = G.tactic, w = { 'a focused lantern': Tc.lantern, flares: Tc.flare * 2.5, beacons: Tc.beacon / 5 }, tot = Object.values(w).reduce((a, b) => a + b, 0);
-  const cons = [];
-  if (heard.length) cons.push(`<li><span class="chip bad">Voices</span>You heard ${heard.map(s => esc(s.name)).join(', ')} and did not reach them. If any are real, leaving them is remembered here, and the dark learns the voice.</li>`);
-  if (unheard) cons.push(`<li><span class="chip">Unfound</span>${unheard} more voice${unheard > 1 ? 's' : ''} you never heard.</li>`);
-  if (G.escorts.length) cons.push(`<li><span class="chip bad">Behind you</span>${G.escorts.map(e => esc(e.name)).join(', ')} ${G.escorts.length > 1 ? 'are' : 'is'} still outside the Sanctuary's light and would be left behind.</li>`);
-  if (lit) cons.push(`<li><span class="chip warn">Beacons</span>${lit} beacon${lit > 1 ? 's' : ''} stay lit here and hold this ground for your next two crossings. They do not come with you.</li>`);
-  if (G.items.some(i => i.kind === 'pack')) cons.push('<li><span class="chip warn">Pack</span>Your dropped pack stays in the dark.</li>');
-  cons.push(`<li><span class="chip">Journey</span>The next walk costs ${lo === hi ? lo : lo + '–' + hi} ember. The Sanctuary holds ${ex.ember}.</li>`);
-  if (!S.ablate.adapt && tot >= 4) {
-    const [k, v] = Object.entries(w).sort((a, b) => b[1] - a[1])[0];
-    cons.push(`<li><span class="chip echo">Hollows</span>${v / tot >= 0.5 ? `They are watching how you fight: mostly with ${k}. Keep it up and they will adapt.` : 'Your tactics are mixed. The Hollows have nothing to adapt to yet.'}</li>`);
-  }
+  const frac = Z.totalE ? Math.min(1, G.harvested / Z.totalE) : 0, regrow = Math.round(Math.min(1, clamp(z.richness * (1 - 0.8 * frac), 0.15, 1) + 0.3) * 100);
+  const li = (chip, cls, text) => `<li><span class="chip ${cls}">${chip}</span>${text}</li>`;
+  const keep = [li('Banked', 'good', `${ex.ember} ember and ${ex.salvage} salvage are safe aboard.`), li('Crew', 'good', `${CH.crew.length} aboard.`)];
+  const cost = [li('Journey', '', `The next walk burns ${lo === hi ? lo : lo + '–' + hi} ember.`)];
+  if (heard.length) cost.push(li('Voices', 'bad', `You heard ${heard.map(s => esc(s.name)).join(', ')} and did not reach them. If any are real, this place remembers, and the dark learns the voice.`));
+  if (G.escorts.length) cost.push(li('Behind you', 'bad', `${G.escorts.map(e => esc(e.name)).join(', ')} ${G.escorts.length > 1 ? 'are' : 'is'} outside the Sanctuary's light and would be left.`));
+  if (lit) cost.push(li('Beacons', 'warn', `${lit} beacon${lit > 1 ? 's stay' : ' stays'} lit here. They hold this ground, but do not come with you.`));
+  if (G.items.some(i => i.kind === 'pack')) cost.push(li('Pack', 'warn', 'Your dropped pack stays in the dark.'));
+  const risk = [li('Dark', G.dim > 0.6 ? 'bad' : 'warn', `${Math.round(G.dim * 100)}% and rising${G.blackout ? '. Blackout: Hollows pour in.' : `. Blackout in ${fmtTime((1 - G.dim) / G.dimRate)}.`}`),
+    li('Hollows', 'warn', `${moving} here now, more as it darkens.`), li('Falling', 'warn', 'Anything you carry drops where you fall, and a crew member is scarred carrying you home.')];
+  if (!S.ablate.adapt && tot >= 4) { const [k, v] = Object.entries(w).sort((a, b) => b[1] - a[1])[0]; risk.push(li('Adapting', 'echo', v / tot >= 0.5 ? `They are watching how you fight: mostly with ${k}. Keep it up and they will change to answer it.` : 'Your tactics are mixed. The Hollows have nothing to adapt to yet.')); }
+  const gain = [li('Ember', '', `${left} left here${richest ? `; the richest room still holds ${richest}` : ''}. Deeper rooms hold more.`)];
+  if (unheard + heard.length) gain.push(li('Voices', 'echo', `${heard.length + unheard} unreached${unheard ? `, ${unheard} not yet heard` : ''}.`));
+  if (relicSeen) gain.push(li('Relic', 'survey', 'You saw something old glowing here.'));
+  const back = [li('Not this crossing', '', 'The Sanctuary only walks forward.'), li('Next crossing', '', `This place regrows to about ${regrow}%, lit beacons keep burning for two crossings, and it remembers anyone you left.`)];
   const buy = (what, pay, price, can) => `<button type="button" class="btn ghost small" data-buy="${what}" data-pay="${pay}" ${can ? '' : 'disabled'}>${price} ${pay}</button>`;
   const fl = P.flares < 5, bc = P.beacons < beaconCap();
+  const col = (title, items) => `<section class="q"><h3>${title}</h3><ul class="list">${items.join('')}</ul></section>`;
   $('dockPanel').innerHTML = `
-    <div><p class="eyebrow">The Sanctuary · ${esc(G.node.name)}</p><h2>Stay, or walk on?</h2></div>
-    <div class="card-surface grid2">
-      <dl class="kv">
-        <dt>Ember left here</dt><dd>${left} of ${Z.totalE} (${pct}%)</dd>
-        <dt>You gathered</dt><dd>${G.harvested} in ${fmtTime(G.t)}</dd>
-        <dt>Your pace</dt><dd>${G.t > 20 ? (G.harvested / (G.t / 60)).toFixed(1) + ' / min' : 'too early'}</dd>
-        <dt>The dark</dt><dd>${Math.round(G.dim * 100)}%${G.blackout ? ', blackout' : ', blackout in ' + fmtTime((1 - G.dim) / G.dimRate)}</dd>
-        <dt>Sanctuary stores</dt><dd>${ex.ember} ember · ${ex.salvage} salvage</dd>
-      </dl>
-      <div class="resupply" style="display:grid;gap:10px">
-        <h3>Resupply</h3>
-        <div class="buy"><span>Flare<i>${P.flares} / 5</i></span>${buy('flare', 'salvage', 1, fl && ex.salvage >= 1)}${buy('flare', 'ember', 4, fl && ex.ember >= 4)}</div>
-        <div class="buy"><span>Beacon<i>${P.beacons} / ${beaconCap()}</i></span>${buy('beacon', 'salvage', 1, bc && ex.salvage >= 1)}${buy('beacon', 'ember', 5, bc && ex.ember >= 5)}</div>
-        <p class="muted">Warmth refills while you stand in the Sanctuary's light. Time stands still while you decide.</p>
-      </div>
+    <div><p class="eyebrow">The Sanctuary · ${esc(G.node.name)} · ${fmtTime(G.t)} here, ${G.harvested} ember gathered</p><h2>Stay, or walk on?</h2><p class="muted">Time stands still while you decide. Warmth refills in the Sanctuary's light.</p></div>
+    <div class="cols five">${col('If you leave, you keep', keep)}${col('Leaving costs', cost)}${col('Staying risks', risk)}${col('Going deeper could gain', gain)}${col('Can you come back?', back)}</div>
+    <div class="card-surface resupply"><h3>Resupply</h3>
+      <div class="buy"><span>Flare<i>${P.flares} / 5</i></span>${buy('flare', 'salvage', 1, fl && ex.salvage >= 1)}${buy('flare', 'ember', 4, fl && ex.ember >= 4)}</div>
+      <div class="buy"><span>Beacon<i>${P.beacons} / ${beaconCap()}</i></span>${buy('beacon', 'salvage', 1, bc && ex.salvage >= 1)}${buy('beacon', 'ember', 5, bc && ex.ember >= 5)}</div>
     </div>
-    <section><h3>If you leave now</h3><ul class="list">${cons.join('')}</ul></section>
     <div class="btn-row"><button class="btn" id="dockDepart" type="button">Walk on</button><button class="btn ghost" id="dockBack" type="button" data-autofocus>Back into the dark</button></div>`;
+  emit('dockOpen', {});
 }
 function buyItem(what, pay) {
   const P = G.p, ex = CH.exp, price = { flare: { salvage: 1, ember: 4 }, beacon: { salvage: 1, ember: 5 } }[what][pay];
@@ -2187,7 +2492,7 @@ function openRead(idx) {
 function closeRead() { state = 'zone'; showScreen(null); }
 function openPause() { if (state !== 'zone') return; state = 'pause'; clearHeld(); renderPause(); showScreen('scrPause'); }
 function renderPause() {
-  $('pausePanel').innerHTML = `<p class="eyebrow">${esc(G.node.name)} · the dark waits for you</p><h2>Paused</h2><p class="muted">Quitting returns you to the moment you arrived here. Everything before that is saved.</p><div class="btn-row"><button class="btn" id="pResume" type="button">Resume</button><button class="btn ghost" id="pSettings" type="button">Settings</button><button class="btn ghost" id="pChron" type="button">Chronicle</button><button class="btn ghost" id="pQuit" type="button">Quit to title</button></div>`;
+  $('pausePanel').innerHTML = `<p class="eyebrow">${esc(G.node.name)} · the dark waits for you</p><h2>Paused</h2><p class="muted">Quitting returns you to the moment you arrived here. Everything before that is saved.</p><div class="btn-row"><button class="btn" id="pResume" type="button">Resume</button><button class="btn ghost" id="pSettings" type="button">Settings</button><button class="btn ghost" id="pHelp" type="button">Field guide</button><button class="btn ghost" id="pChron" type="button">Chronicle</button><button class="btn ghost" id="pQuit" type="button">Quit to title</button></div>`;
 }
 function resume() { state = 'zone'; showScreen(null); }
 
@@ -2338,6 +2643,9 @@ document.addEventListener('click', e => {
     case 'pSettings': openSettings('pause'); break;
     case 'pChron': openChron('pause'); break;
     case 'pQuit': showTitle(); break;
+    case 'pHelp': openHelp('pause'); break;
+    case 'btnHelp': openHelp('title'); break;
+    case 'helpBack': helpBack(); break;
     case 'setBack': settingsBack(); break;
     case 'chronBack': chronBack(); break;
     case 'eraseBtn': eraseArmed = true; renderChron(); refocus('#eraseNo'); break;
@@ -2359,10 +2667,22 @@ function frame(t) {
   clearPresses();
   if (G) renderZone(raw); else renderBackdrop(t / 1000);
   audioTick();
-  toastTick(raw);
+  guideTick(raw);
   requestAnimationFrame(frame);
 }
-if (location.hash === '#debug') window.MS = { get G() { return G; }, get CH() { return CH; }, get state() { return state; }, depart, enterZone, update };
+/* ===================== debug hooks (only with ?debug=1 or #debug) ===================== */
+const DEBUG = /[?&]debug=1/.test(location.search) || location.hash === '#debug';
+if (DEBUG) {
+  const events = [];
+  on((type, d) => { events.push({ type, t: G ? +G.t.toFixed(2) : 0, k: d.k, how: d.how, manip: d.manip }); if (events.length > 800) events.shift(); });
+  window.MS = {
+    get G() { return G; }, get CH() { return CH; }, get state() { return state; }, get AU() { return AU; }, get S() { return S; }, events,
+    depart, enterZone, update, emit, tryShift, spawnHollowAt, doorPinned, doorLit, homeDist, keyLabel,
+    seed(n) { Math.random = mulberry32(n); },
+    teleport(x, y) { G.p.x = x; G.p.y = y; G.cam.x = x; G.cam.y = y; },
+    guide() { return guideState(); }
+  };
+}
 showTitle();
 requestAnimationFrame(frame);
 })();
