@@ -290,9 +290,10 @@ await scenario('audio: heard voices raise suspicion; captions match speech and s
   await beginFirstPlace(pg);
   await pg.evaluate(() => { const G = MS.G, m = G.signals.find(s => !s.real); G.hollows.forEach(h => h.dead = true); MS.teleport(m.x - 200, m.y); G.debugAim = 0; });
   await pg.waitForTimeout(2500);
-  const r = await pg.evaluate(() => ({ sus: MS.audioStats().layers.suspicion, caps: MS.captions }));
+  const r = await pg.evaluate(() => ({ sus: MS.audioStats().layers.suspicion, caps: MS.captions, name: MS.G.signals.find(s => !s.real).name }));
   assert(r.sus > 0.2, 'suspicion layer rises near a heard, unresolved voice: ' + r.sus);
-  assert(!r.caps.some(c => c.startsWith('speech:')), 'an on-screen speaker is captioned by its bubble, not twice');
+  // other voices off screen may be captioned; the one in view is captioned only by its bubble
+  assert(!r.caps.some(c => c.startsWith('speech:') && c.includes(`calling itself ${r.name}:`)), 'an on-screen speaker is captioned by its bubble, not twice: ' + JSON.stringify(r.caps));
   await pg.evaluate(() => { const s = MS.G.signals[0]; MS.emit('voice', { s: { ...s, x: s.x + 5000 }, dx: 5000, dy: 0 }); });
   const caps2 = await pg.evaluate(() => MS.captions);
   assert(caps2.some(c => /speech: Voice to the east, calling itself/.test(c)), 'an off-screen speaker gets a caption with direction: ' + caps2.join(' | '));
@@ -351,6 +352,53 @@ await scenario('touch: phone layout, on-screen controls work, nothing overlaps t
 
 const fixture = JSON.parse(readFileSync(path.join(here, 'fixtures', 'pre-upgrade-v1.json'), 'utf8'));
 const fixtureStore = { 'moving-sanctuary.chronicle.v1': JSON.stringify(fixture.chronicle), 'moving-sanctuary.settings.v1': JSON.stringify(fixture.settings) };
+await scenario('research: comparison toggle holds doorways; questionnaire saves locally and exports as JSON', async pg => {
+  await pg.evaluate(() => { MS.S.ablate.shift = true; });
+  await pg.click('#btnBegin'); await pg.click('.rnode.avail'); await pg.click('#goBtn');
+  await pg.waitForFunction(() => MS.state === 'zone');
+  const changed = await pg.evaluate(() => {
+    const G = MS.G, Z = G.Z; G.debugAim = Math.PI; const snap = Z.edges.map(e => e.open); let n = 0;
+    for (let i = 0; i < 1200; i++) { MS.update(1 / 30); Z.edges.forEach((e, k) => { if (e.open !== snap[k]) { n++; snap[k] = e.open; } }); }
+    return n;
+  });
+  assert(changed === 0, 'with "Doorways never move" on, no doorway changed in 40 s (changed ' + changed + ')');
+  await pg.evaluate(() => { MS.teleport(MS.G.sanct.x + 70, MS.G.sanct.y); });
+  await pg.waitForTimeout(150); await pg.keyboard.press('e'); await pg.click('#dockDepart'); await pg.waitForTimeout(250);
+  await pg.evaluate(() => { MS.CH.exp.ember = 0; MS.CH.exp.salvage = 0; });
+  await pg.click('#restBtn'); await pg.click('#btnContinue'); await pg.click('#endBtn');
+  await pg.waitForFunction(() => MS.state === 'debrief');
+  await pg.click('.notes summary');
+  const nq = await pg.evaluate(() => document.querySelectorAll('.likert fieldset').length);
+  assert(nq >= 3, 'questionnaire is offered (' + nq + ' questions)');
+  for (let i = 0; i < nq; i++) await pg.click(`label:has(#lk${i}-${(i % 7) + 1})`);
+  await pg.click('#notesSave');
+  const saved = await pg.evaluate(() => JSON.parse(localStorage.getItem('moving-sanctuary.chronicle.v1')).notes.at(-1));
+  assert(saved && saved.answers.every((a, i) => a === (i % 7) + 1), 'answers stored on this device');
+  assert(saved.variants.shift === true, 'the comparison variant is recorded with the notes');
+  for (const k of ['decisionsPerMin', 'doorSurprises', 'firstDoorSeconds', 'doorsChangedWhileLookingAway', 'lensInformedReads', 'flareResults', 'packsRecovered', 'packsLeftBehind', 'idlePauses']) assert(k in saved.metrics, 'metrics include ' + k);
+  await pg.evaluate(() => { try { Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.reject(new Error('denied')) } }); } catch (e) {} });
+  await pg.click('#notesCopy'); await pg.waitForTimeout(150);
+  const text = await pg.evaluate(() => document.getElementById('notesText').value);
+  let parsed = null; try { parsed = JSON.parse(text); } catch (e) {}
+  assert(parsed && Array.isArray(parsed.questions) && parsed.notes.length >= 1, 'export falls back to selectable JSON when the clipboard is refused');
+  await pg.evaluate(() => { MS.S.ablate.shift = false; });
+});
+
+await scenario('performance: normal frames keep full quality; sustained slow frames halve the darkness mask once', async pg => {
+  await pg.click('#btnBegin'); await pg.click('.rnode.avail'); await pg.click('#goBtn');
+  await pg.waitForFunction(() => MS.state === 'zone');
+  await pg.waitForTimeout(3000);
+  const base = await pg.evaluate(() => ({ scale: MS.QUALITY.maskScale, work: MS.frameWorkMs }));
+  console.log('      frame work (headless, software GL): ' + base.work + ' ms average');
+  assert(base.scale === 1, 'full-resolution mask at normal cost (' + base.work + ' ms)');
+  await pg.evaluate(() => MS.stall(16));
+  await pg.waitForFunction(() => MS.QUALITY.maskScale === 0.5, null, { timeout: 8000 });
+  await pg.evaluate(() => MS.stall(0));
+  await pg.waitForTimeout(400);
+  const after = await pg.evaluate(() => ({ ev: MS.events.filter(e => e.type === 'quality').length, state: MS.state }));
+  assert(after.ev === 1 && after.state === 'zone', 'quality steps down exactly once and play continues');
+});
+
 await scenario('save: a real pre-upgrade v1 save loads untouched, plays, saves and reloads', async pg => {
   const raw0 = await pg.evaluate(() => localStorage.getItem('moving-sanctuary.chronicle.v1'));
   assert(raw0 === fixtureStore['moving-sanctuary.chronicle.v1'], 'loading the title does not rewrite the save');

@@ -1446,7 +1446,7 @@ function depart() {
 const cv = $('game'), ctx = cv.getContext('2d');
 const dark = document.createElement('canvas'), dctx = dark.getContext('2d');
 let W = 0, H = 0, DPR = 1, safeTop = 0, safeBot = 0, vignette = null;
-const QUALITY = { maskScale: 1 };   // the darkness mask drops to half resolution if frames run long
+const QUALITY = { maskScale: 1 };   // watchCost() in the loop drops the darkness mask to half resolution if frames run long
 function mkCanvas(w, h) { const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h)); return c; }
 function resize() {
   DPR = Math.min(window.innerWidth < 700 ? 1.5 : 2, window.devicePixelRatio || 1);
@@ -2697,7 +2697,7 @@ on((type, d) => {
     case 'packRecovered': case 'bank': [60, 64, 67].forEach((m, k) => tone(mt(m + 12), 0.6, { type: 'triangle', vol: 0.05, at: now + k * 0.07, bus: AU.bus.ui })); break;
     case 'voice': {
       murmur(d.s, clamp(d.dx / 300, -1, 1)); duck(0.4, 2.2);
-      const v = G.view, sx = v.ox + d.s.x * v.zoom, sy = v.oy + d.s.y * v.zoom;   // on screen, the speech bubble at the speaker is the caption
+      const z = G.view ? G.view.zoom : 1, sx = W / 2 + (d.s.x - G.cam.x) * z, sy = H / 2 + (d.s.y - G.cam.y) * z;   // on screen (live camera, not last frame's view), the speech bubble is the caption
       if (!onScreen(sx, sy, -20)) caption(`Voice ${dirWord(d.dx, d.dy)}, calling itself ${d.s.name}: "${d.s.line}"`, 'speech');
       break;
     }
@@ -3127,7 +3127,7 @@ function saveNotes() {
   CH.notes.push({
     at: new Date().toISOString(), crossing: L.crossing, outcome: L.kind, answers,
     variants: Object.assign({}, S.ablate), challenge: { pace: S.pace, shift: S.shift, tells: S.tells },
-    metrics: { minutes: +(st.time / 60).toFixed(1), decisionsPerMin: st.time ? +(st.decisions / (st.time / 60)).toFixed(2) : 0, zones: st.zones, stays: st.stays, lensSwitches: st.lensSwitches, lensSeconds: st.lensTime.map(Math.round), doorSurprises: st.doorSurprises, mimicsMet: st.mimicsMet, mimicsExposed: st.mimicsExposed, mimicCues: st.mimicCues, rescued: st.rescued, taken: st.taken, abandoned: st.abandoned, falls: st.falls, relics: st.relics }
+    metrics: { minutes: +(st.time / 60).toFixed(1), decisionsPerMin: st.time ? +(st.decisions / (st.time / 60)).toFixed(2) : 0, zones: st.zones, stays: st.stays, lensSwitches: st.lensSwitches, lensSeconds: st.lensTime.map(Math.round), doorSurprises: st.doorSurprises, mimicsMet: st.mimicsMet, mimicsExposed: st.mimicsExposed, mimicCues: st.mimicCues, rescued: st.rescued, taken: st.taken, abandoned: st.abandoned, falls: st.falls, relics: st.relics, firstDoorSeconds: st.firstDoorT ?? null, doorsChangedWhileLookingAway: st.manipulations || 0, lensInformedReads: st.lensInformed || 0, flareResults: st.flareResults || [], packsRecovered: st.packRecovered || 0, packsLeftBehind: st.packsAbandoned || 0, idlePauses: (st.idle || []).length }
   });
   saveChronicle();
   $('notesStatus').textContent = `Saved on this device. ${CH.notes.length} note${CH.notes.length > 1 ? 's' : ''} so far.`;
@@ -3266,8 +3266,16 @@ document.addEventListener('click', e => {
 });
 
 /* ===================== loop ===================== */
-let last = performance.now();
+let last = performance.now(), workAvg = 0, workN = 0, debugStall = 0;
+// If the work in a frame stays long in a place, draw the darkness mask at half resolution. One step, never back up mid-session.
+function watchCost(ms) {
+  if (QUALITY.maskScale < 1 || state !== 'zone') return;
+  workAvg = workN ? workAvg * 0.95 + ms * 0.05 : ms; workN++;
+  if (workN > 120 && workAvg > 12) { QUALITY.maskScale = 0.5; resize(); emit('quality', { maskScale: 0.5, workMs: +workAvg.toFixed(1) }); }
+}
 function frame(t) {
+  const w0 = performance.now();
+  if (debugStall) while (performance.now() - w0 < debugStall) {}
   const raw = Math.min(0.05, (t - last) / 1000); last = t;
   pollPad(raw);
   if (state === 'zone' && G) update(raw);
@@ -3276,6 +3284,7 @@ function frame(t) {
   audioTick(raw);
   renderCaptions();
   guideTick(raw);
+  watchCost(performance.now() - w0);
   requestAnimationFrame(frame);
 }
 /* ===================== debug hooks (only with ?debug=1 or #debug) ===================== */
@@ -3288,7 +3297,8 @@ if (DEBUG) {
     depart, enterZone, update, emit, tryShift, spawnHollowAt, doorPinned, doorLit, homeDist, keyLabel,
     seed(n) { Math.random = mulberry32(n); },
     teleport(x, y) { G.p.x = x; G.p.y = y; G.cam.x = x; G.cam.y = y; },
-    guide() { return guideState(); }
+    guide() { return guideState(); },
+    QUALITY, stall(ms) { debugStall = ms; }, get frameWorkMs() { return +workAvg.toFixed(2); }
   };
 }
 applyPresentation();
