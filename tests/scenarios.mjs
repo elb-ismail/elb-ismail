@@ -231,10 +231,10 @@ await scenario('fall: pack drops where you fell, crew scarred, guidance points t
   assert(r.scars.includes(1), 'a crew member is scarred');
   assert(r.guide === 'carried', 'guidance explains the changed situation, got ' + r.guide);
   await pg.shot('A-after-fall');
-  await pg.evaluate(() => { const p = MS.G.items.find(i => i.kind === 'pack'); MS.G.hollows.forEach(h => h.dead = true); MS.teleport(p.x + 16, p.y); });
+  await pg.evaluate(() => { const p = MS.G.items.find(i => i.kind === 'pack'); MS.G.hollows.forEach(h => h.dead = true); MS.teleport(p.x, p.y + 1); });
   await pg.keyboard.down('e'); await pg.waitForTimeout(700); await pg.keyboard.up('e');
-  const back = await pg.evaluate(() => ({ carry: MS.G.p.carryE, rec: MS.CH.exp.stats.packRecovered }));
-  assert(back.carry === 7 && back.rec === 1, 'pack recovered');
+  const back = await pg.evaluate(() => ({ carry: MS.G.p.carryE, rec: MS.CH.exp.stats.packRecovered, target: MS.G.target && MS.G.target.kind, fall: MS.G.fallT, warm: MS.G.p.warmth, state: MS.state }));
+  assert(back.carry >= 7 && back.rec === 1, 'pack recovered: ' + JSON.stringify(back));
 }, { seed: 18 });
 
 await scenario('return later: lessons persist across crossings; the second visit is not a tutorial', async pg => {
@@ -260,6 +260,85 @@ await scenario('return later: lessons persist across crossings; the second visit
   assert(r.crossing === 2 && !r.teach, 'second crossing is not staged');
   assert(r.done.includes('beacon'), 'learned lessons persist: ' + r.done.join(','));
 }, { seed: 19 });
+
+/* ---------- Milestone C: audio, captions, accessibility, persistence ---------- */
+await scenario('audio: nothing before a gesture; buses independent; mute; nodes released', async pg => {
+  assert(await pg.evaluate(() => MS.audioStats()) === null, 'no AudioContext before the player interacts');
+  await beginFirstPlace(pg);
+  const a0 = await pg.evaluate(() => MS.audioStats());
+  assert(a0 && a0.state === 'running', 'context running after the click: ' + (a0 && a0.state));
+  await pg.evaluate(() => { const G = MS.G; MS.teleport(G.sanct.x + 300, G.sanct.y); G.debugAim = Math.PI; for (let i = 0; i < 4; i++) MS.spawnHollowAt(G.p.x + 60 + i * 20, G.p.y + 30, 'plain', 0); });
+  await pg.waitForTimeout(3500);
+  const busy = await pg.evaluate(() => MS.audioStats());
+  assert(busy.layers.danger > 0.2, 'danger layer rises with moving Hollows near: ' + busy.layers.danger);
+  assert(busy.peak < 120, 'one-shot voices stay under the cap: ' + busy.peak);
+  await pg.evaluate(() => { MS.G.hollows.forEach(h => h.dead = true); MS.teleport(MS.G.sanct.x + 70, MS.G.sanct.y); });
+  await pg.waitForTimeout(3000);
+  const calm = await pg.evaluate(() => MS.audioStats());
+  assert(calm.layers.danger < busy.layers.danger * 0.5, 'danger fades smoothly when safe: ' + calm.layers.danger);
+  assert(calm.active < 40 && calm.created > busy.created, `finished sounds are released (active ${calm.active}, created ${calm.created})`);
+  await pg.keyboard.press('Escape'); await pg.click('#pSettings');
+  await pg.$eval('#vol-music', el => { el.value = 0; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  await pg.waitForTimeout(600);
+  const mv = await pg.evaluate(() => MS.audioStats());
+  assert(mv.bus.music < 0.02 && mv.bus.sfx > 0.5 && mv.bus.voice > 0.5, 'music slider moves only the music bus: ' + JSON.stringify(mv.bus));
+  await pg.click('[data-toggle="sound"]'); await pg.waitForTimeout(500);
+  assert((await pg.evaluate(() => MS.audioStats())).master < 0.02, 'sound off mutes the master');
+});
+
+await scenario('audio: heard voices raise suspicion; captions match speech and sound; captions can be turned off', async pg => {
+  await beginFirstPlace(pg);
+  await pg.evaluate(() => { const G = MS.G, m = G.signals.find(s => !s.real); G.hollows.forEach(h => h.dead = true); MS.teleport(m.x - 200, m.y); G.debugAim = 0; });
+  await pg.waitForTimeout(2500);
+  const r = await pg.evaluate(() => ({ sus: MS.audioStats().layers.suspicion, caps: MS.captions }));
+  assert(r.sus > 0.2, 'suspicion layer rises near a heard, unresolved voice: ' + r.sus);
+  assert(r.caps.some(c => c.startsWith('speech: Voice')), 'speech caption with direction: ' + r.caps.join(' | '));
+  // environmental caption for a doorway shifting nearby
+  await pg.evaluate(() => MS.emit('doorChanged', { k: 0, near: true, dx: 200, dy: 0 }));
+  assert((await pg.evaluate(() => MS.captions)).some(c => /Stone shifting to the east/.test(c)), 'sound caption names the cue and its direction');
+  await pg.evaluate(() => { MS.S.envCaptions = false; MS.S.captions = false; MS.emit('doorChanged', { k: 1, near: true, dx: -200, dy: 0 }); });
+  assert(!(await pg.evaluate(() => MS.captions)).some(c => /to the west/.test(c)), 'no caption when turned off');
+});
+
+await scenario('accessibility: reduced motion follows the system; contrast, rebinding and volumes persist', async pg => {
+  const a = await pg.evaluate(() => ({ motion: MS.S.motion, rm: document.documentElement.classList.contains('rm') }));
+  assert(a.motion === false && a.rm, 'prefers-reduced-motion turns motion off by default');
+  await pg.click('#btnSettings');
+  await pg.click('[data-toggle="contrast"]');
+  assert(await pg.evaluate(() => document.documentElement.classList.contains('hc')), 'high contrast applied');
+  await pg.click('[data-rebind="flare"]'); await pg.keyboard.press('g');
+  await pg.$eval('#vol-voice', el => { el.value = 35; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  await pg.shot('C-settings-contrast');
+  await pg.reload(); await pg.waitForFunction(() => window.MS && MS.state === 'title');
+  const b = await pg.evaluate(() => ({ hc: document.documentElement.classList.contains('hc'), key: MS.S.keys.flare, voice: MS.S.vol.voice }));
+  assert(b.hc && b.key === 'g' && Math.abs(b.voice - 0.35) < 0.001, 'settings survive reload: ' + JSON.stringify(b));
+  await beginFirstPlace(pg);
+  const f0 = await pg.evaluate(() => MS.G.p.flares);
+  await pg.keyboard.press('g'); await pg.waitForTimeout(300);
+  assert(await pg.evaluate(() => MS.G.p.flares) === f0 - 1, 'rebound key throws a flare');
+}, { reducedMotion: 'reduce' });
+
+const fixture = JSON.parse(readFileSync(path.join(here, 'fixtures', 'pre-upgrade-v1.json'), 'utf8'));
+const fixtureStore = { 'moving-sanctuary.chronicle.v1': JSON.stringify(fixture.chronicle), 'moving-sanctuary.settings.v1': JSON.stringify(fixture.settings) };
+await scenario('save: a real pre-upgrade v1 save loads untouched, plays, saves and reloads', async pg => {
+  const raw0 = await pg.evaluate(() => localStorage.getItem('moving-sanctuary.chronicle.v1'));
+  assert(raw0 === fixtureStore['moving-sanctuary.chronicle.v1'], 'loading the title does not rewrite the save');
+  const t = await pg.evaluate(() => ({ line: document.getElementById('titleChron').textContent, tells: MS.S.tells, vol: MS.S.vol.master, keys: MS.S.keys.use }));
+  assert(/in progress/.test(t.line) && t.tells === 'clear' && t.vol === 0.8 && t.keys === 'e', 'old settings kept, new ones defaulted: ' + JSON.stringify(t));
+  await pg.click('#btnContinue');
+  await pg.waitForFunction(() => MS.state === 'route');
+  const pinned = fixture.chronicle.zones['1-0'].beacons.length;
+  assert(pinned === 1, 'fixture holds a persisted beacon');
+  await pg.click('.rnode.avail'); await pg.click('#goBtn'); await pg.waitForFunction(() => MS.state === 'zone');
+  await pg.waitForTimeout(800);
+  await toDock(pg); await pg.click('#dockDepart'); await pg.waitForFunction(() => MS.state === 'route');
+  await pg.reload(); await pg.waitForFunction(() => window.MS && MS.state === 'title');
+  const c = await pg.evaluate(() => JSON.parse(localStorage.getItem('moving-sanctuary.chronicle.v1')));
+  assert(c.v === 1 && c.crew.some(x => x.name === fixture.chronicle.crew[1].name), 'crew from the old save survives');
+  assert(c.zones['1-0'].beacons.length === 1, 'old beacon still recorded');
+  assert(c.exp.path.length === fixture.chronicle.exp.path.length + 1, 'progress continued from the old save');
+  assert(c.exp.stats.zones === fixture.chronicle.exp.stats.zones + 1, 'old stats extended, not reset');
+}, { storage: fixtureStore });
 
 await browser.close();
 const fails = results.filter(r => !r[1].startsWith('PASS'));
