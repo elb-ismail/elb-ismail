@@ -6,6 +6,7 @@ import { execSync } from 'child_process';
 import { mkdirSync, readFileSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
+import { routeThree } from './three-route.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -28,12 +29,13 @@ function assert(cond, msg) { if (!cond) throw new Error('assert: ' + msg); }
 
 async function page(opts = {}) {
   const ctx = await browser.newContext({ viewport: opts.viewport || { width: 1280, height: 780 }, hasTouch: !!opts.touch, isMobile: !!opts.touch, reducedMotion: opts.reducedMotion || 'no-preference' });
+  await routeThree(ctx, root);
   const pg = await ctx.newPage();
   pg.errors = [];
   pg.on('pageerror', e => pg.errors.push('pageerror: ' + e.message));
   pg.on('console', m => { if (m.type() === 'error' && !/ERR_CERT|fonts\.g/.test(m.text())) pg.errors.push('console: ' + m.text()); });
   if (opts.storage) await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { for (const [k, v] of Object.entries(s)) localStorage.setItem(k, v); sessionStorage.setItem('seeded', '1'); } }, opts.storage);
-  await pg.goto(URL_BASE + '?debug=1' + (opts.hash || ''));
+  await pg.goto(URL_BASE + '?debug=1' + (opts.query || '') + (opts.hash || ''));
   await pg.waitForFunction(() => window.MS && MS.state === 'title');
   if (opts.seed != null) await pg.evaluate(n => MS.seed(n), opts.seed);
   pg.shot = name => pg.screenshot({ path: path.join(OUT, name + '.png') });
@@ -260,6 +262,24 @@ await scenario('return later: lessons persist across crossings; the second visit
   assert(r.crossing === 2 && !r.teach, 'second crossing is not staged');
   assert(r.done.includes('beacon'), 'learned lessons persist: ' + r.done.join(','));
 }, { seed: 19 });
+
+/* ---------- 3D migration ---------- */
+await scenario('3d step 1: Three.js loads on demand, WebGL2 draws the room under the 2D HUD layer', async pg => {
+  await pg.waitForFunction(() => MS.r3 === 'ready' || MS.r3 === 'failed', null, { timeout: 15000 });
+  assert(await pg.evaluate(() => MS.r3) === 'ready', '3D renderer ready: ' + await pg.evaluate(() => MS.r3Error));
+  await beginFirstPlace(pg);
+  await pg.waitForTimeout(500);
+  const r = await pg.evaluate(() => {
+    const c3 = document.getElementById('game3d'), c2 = document.getElementById('game');
+    const order = c3.compareDocumentPosition(c2) & Node.DOCUMENT_POSITION_FOLLOWING;   // 2D canvas paints over the 3D one
+    const gl = c3.getContext('webgl2'), px = new Uint8Array(4);
+    return { order: !!order, webgl2: !!gl, w: c3.width, h: c3.height, bg2d: getComputedStyle(c2).backgroundColor };
+  });
+  assert(r.webgl2 && r.w > 0 && r.h > 0, 'WebGL2 canvas sized: ' + JSON.stringify(r));
+  assert(r.order, 'the 2D HUD canvas sits above the 3D world canvas');
+  assert(/rgba\(0, 0, 0, 0\)|transparent/.test(r.bg2d), '2D layer is transparent over the world: ' + r.bg2d);
+  await pg.shot('3D-step1-graybox');
+}, { query: '&r3d=1', seed: 11 });
 
 /* ---------- Milestone C: audio, captions, accessibility, persistence ---------- */
 await scenario('audio: nothing before a gesture; buses independent; mute; nodes released', async pg => {

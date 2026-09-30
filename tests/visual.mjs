@@ -4,6 +4,7 @@ import { execSync } from 'child_process';
 import { mkdirSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 import path from 'path';
+import { routeThree } from './three-route.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const URL_BASE = pathToFileURL(path.join(here, '..', 'index.html')).href;
 const OUT = path.join(here, 'out', 'visual'); mkdirSync(OUT, { recursive: true });
@@ -14,6 +15,7 @@ const browser = await chromium.launch().catch(() => chromium.launch({ executable
 const errors = [];
 async function tour(tag, viewport, touch) {
   const ctx = await browser.newContext({ viewport, hasTouch: touch, isMobile: touch, reducedMotion: flags.includes('reduced') ? 'reduce' : 'no-preference' });
+  await routeThree(ctx, path.join(here, '..'));
   const pg = await ctx.newPage();
   pg.on('pageerror', e => errors.push(tag + ': ' + e.message));
   pg.on('console', m => { if (m.type() === 'error' && !/ERR_CERT|fonts\.g/.test(m.text())) errors.push(tag + ': ' + m.text()); });
