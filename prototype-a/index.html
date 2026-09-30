@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Moving Sanctuary: Prototype A</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0e1418; overflow: hidden; font: 15px/1.4 system-ui, sans-serif; color: #e8e0cf; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    .panel { position: fixed; background: rgba(10, 14, 18, 0.78); border: 1px solid #3a4450; border-radius: 6px; padding: 8px 12px; }
+    #objective { top: 14px; left: 14px; font-weight: 600; }
+    #controls { bottom: 14px; left: 14px; font-size: 13px; color: #b9c2cc; }
+    #prompt { bottom: 70px; left: 50%; transform: translateX(-50%); font-weight: 700; border-color: #c98a3a; }
+    #toast { top: 60px; left: 50%; transform: translateX(-50%); max-width: 70vw; text-align: center; }
+    #debug { top: 14px; right: 14px; font: 12px/1.45 ui-monospace, monospace; min-width: 300px; color: #cfd8e3; }
+    #debug hr { border: 0; border-top: 1px solid #3a4450; margin: 4px 0; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="objective" class="panel"></div>
+  <div id="controls" class="panel">WASD / arrow keys: move &nbsp;·&nbsp; E: plant beacon (at the cradle) &nbsp;·&nbsp; R: restart &nbsp;·&nbsp; F3: debug</div>
+  <div id="prompt" class="panel" hidden></div>
+  <div id="toast" class="panel" hidden></div>
+  <div id="debug" class="panel" hidden></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

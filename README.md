@@ -111,6 +111,10 @@ The source is kept as one file on purpose. `index.html` is what you edit and wha
 - **Notes.** The debrief has optional 1–7 questions about wanting to replay, pressure, agency, fairness of surprises, and ability to stop. They are saved with decision metrics: time, decisions per minute, when and why you left each place, lens use, doorway surprises, time to the first doorway change, doorways that changed while you were deliberately looking away, reads informed by a lens, what each flare did, packs recovered or left behind, long idle pauses, mimic clues seen, rescues and abandonments. "Copy all notes" exports them as JSON. Nothing leaves the device.
 - **Debug hook.** Opening the page with `?debug=1` or `#debug` exposes the game state as `window.MS`, for automated tests.
 
+## Prototype A (3D, separate project)
+
+`prototype-a/` holds a graybox Three.js/TypeScript/Vite prototype for the fixed-camera 3D direction. It tests only the camera, the beacon and the changed-doorway rule. It is separate from the single-file game above. See `prototype-a/README.md`.
+
 ## History
 
 The first version in this repository was **Voidlight**, a twin-stick arena shooter. It is still in the git history (`fa76913`). It was replaced because it did not follow the design briefs above.
