@@ -201,7 +201,15 @@ await scenario('order: ignore the voice and walk into the mimic untested; reveal
 
 await scenario('order: flare the voice first, before any lens; mimic exposed, guidance moves on', async pg => {
   await beginFirstPlace(pg);
-  const pos = await pg.evaluate(() => { const G = MS.G, m = G.signals.find(s => !s.real); MS.teleport(m.x - 150, m.y); G.debugAim = 0; MS.update(0.02); const v = G.view; return [v.ox + m.x * v.zoom, v.oy + m.y * v.zoom]; });
+  const pos = await pg.evaluate(() => {
+    // stand 150 px from the mimic with a clear line to it (it may have drifted since generation), facing it
+    const G = MS.G, Z = G.Z, m = G.signals.find(s => !s.real), wall = (x, y) => Z.wall[Math.floor(x / 32) + Math.floor(y / 32) * Z.GW] === 1;
+    const clear = (x, y) => { for (let t = 0; t <= 1; t += 0.02) if (wall(x + (m.x - x) * t, y + (m.y - y) * t)) return false; return true; };
+    let a = Math.PI;
+    for (let i = 0; i < 16; i++) { const b = Math.PI + i * Math.PI / 8, x = m.x + Math.cos(b) * 150, y = m.y + Math.sin(b) * 150; if (clear(x, y)) { a = b; break; } }
+    MS.teleport(m.x + Math.cos(a) * 150, m.y + Math.sin(a) * 150); G.debugAim = a + Math.PI; MS.update(0.02);
+    const v = G.view; return [v.ox + m.x * v.zoom, v.oy + m.y * v.zoom];
+  });
   await pg.mouse.move(pos[0], pos[1]);
   await pg.waitForTimeout(80);
   await pg.keyboard.press('f');
@@ -263,6 +271,29 @@ await scenario('return later: lessons persist across crossings; the second visit
   assert(r.done.includes('beacon'), 'learned lessons persist: ' + r.done.join(','));
 }, { seed: 19 });
 
+await scenario('streams: sound, render jitter and particles never change what the simulation rolls', async pg => {
+  await beginFirstPlace(pg);
+  const r = await pg.evaluate(() => {
+    const id = MS.G.node.id;
+    const run = disturb => {
+      MS.seed(77); MS.enterZone(id);
+      const G = MS.G; G.debugAim = 0.6;
+      for (let i = 0; i < 900; i++) {
+        MS.update(1 / 30);
+        if (i % 120 === 60) MS.emit('flareBurst', { f: { x: G.p.x, y: G.p.y }, result: {} });   // sound + particles
+        disturb();
+      }
+      return JSON.stringify({ doors: G.Z.edges.map(e => e.open ? 1 : 0).join(''), hollows: G.hollows.map(h => [Math.round(h.x), Math.round(h.y), h.kind]), sig: G.signals.map(s => [Math.round(s.x), Math.round(s.y)]), dim: G.dim.toFixed(4), shiftT: G.shiftT.toFixed(4) });
+    };
+    const quiet = run(() => {});
+    const noisy = run(() => { for (let k = 0; k < 40; k++) { MS.rng.audio(); MS.rng.visual(); MS.rng.cosmetic(); } });
+    const control = run(() => { Math.random(); });
+    return { same: quiet === noisy, controlDiffers: quiet !== control };
+  });
+  assert(r.controlDiffers, 'control: consuming the simulation stream does change the outcome (the check is sensitive)');
+  assert(r.same, 'consuming the audio, visual and cosmetic streams leaves the simulation identical');
+}, { seed: 23 });
+
 /* ---------- 3D migration ---------- */
 await scenario('3d step 1: Three.js loads on demand, WebGL2 draws the room under the 2D HUD layer', async pg => {
   await pg.waitForFunction(() => MS.r3 === 'ready' || MS.r3 === 'failed', null, { timeout: 15000 });
@@ -322,7 +353,9 @@ await scenario('audio: nothing before a gesture; buses independent; mute; nodes 
   const a0 = await pg.evaluate(() => MS.audioStats());
   assert(a0 && a0.state === 'running', 'context running after the click: ' + (a0 && a0.state));
   await pg.evaluate(() => { const G = MS.G; MS.teleport(G.sanct.x + 300, G.sanct.y); G.debugAim = Math.PI; for (let i = 0; i < 4; i++) MS.spawnHollowAt(G.p.x + 60 + i * 20, G.p.y + 30, 'plain', 0); });
-  await pg.waitForTimeout(3500);
+  // measure while they are still closing in: they reach the Warden and dissolve on contact from about 2.2 s,
+  // so a 3.5 s wait sampled a falling edge and failed intermittently (danger 0.006-0.1 instead of ~0.8)
+  await pg.waitForTimeout(1500);
   const busy = await pg.evaluate(() => MS.audioStats());
   assert(busy.layers.danger > 0.2, 'danger layer rises with moving Hollows near: ' + busy.layers.danger);
   assert(busy.peak < 120, 'one-shot voices stay under the cap: ' + busy.peak);
@@ -469,6 +502,7 @@ await scenario('save: a real pre-upgrade v1 save loads untouched, plays, saves a
   const c = await pg.evaluate(() => JSON.parse(localStorage.getItem('moving-sanctuary.chronicle.v1')));
   assert(c.v === 1 && c.crew.some(x => x.name === fixture.chronicle.crew[1].name), 'crew from the old save survives');
   assert(c.zones['1-0'].beacons.length === 1, 'old beacon still recorded');
+  if (c.exp.path.length !== fixture.chronicle.exp.path.length + 1) console.log('      diagnostic (save): saved path ' + JSON.stringify(c.exp.path) + ', events ' + JSON.stringify(await pg.evaluate(() => MS.events.map(e => e.type).slice(-20))));   // intermittent once in ~15 full runs; not reproduced in 10 traced replays
   assert(c.exp.path.length === fixture.chronicle.exp.path.length + 1, 'progress continued from the old save');
   assert(c.exp.stats.zones === fixture.chronicle.exp.stats.zones + 1, 'old stats extended, not reset');
 }, { storage: fixtureStore });

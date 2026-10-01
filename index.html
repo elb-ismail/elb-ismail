@@ -307,6 +307,14 @@ function mulberry32(a) {
   };
 }
 const rr = (g, a, b) => a + g() * (b - a);
+// Separate streams: sound and pictures never draw from Math.random, so they cannot change what the simulation
+// rolls. The simulation keeps Math.random (seeded by MS.seed in tests); world generation keeps its own seeded streams.
+const RNG = { audio: null, visual: null, cosmetic: null };
+function seedStreams(n) { RNG.audio = mulberry32((n ^ 0x0a0d1e) >>> 0); RNG.visual = mulberry32((n ^ 0x51a7e5) >>> 0); RNG.cosmetic = mulberry32((n ^ 0xc05e71) >>> 0); }
+seedStreams((Math.random() * 2 ** 32) >>> 0);
+const arand = (a, b) => a + RNG.audio() * (b - a);       // audioRng: sound variation
+const vrand = (a, b) => a + RNG.visual() * (b - a);      // visualRng: per-frame render jitter (shake, flicker)
+const crand = (a, b) => a + RNG.cosmetic() * (b - a);    // cosmeticRng: particles and decoration
 function shuffle(g, arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(g() * (i + 1)); const t = arr[i]; arr[i] = arr[j]; arr[j] = t; } return arr; }
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -900,7 +908,7 @@ function updCamera(dt) {
 }
 
 /* ===================== small helpers ===================== */
-function addPart(x, y, col, spd, life, size, kind) { if (G.parts.length > 500) return; const a = Math.random() * TAU, v = spd * rand(0.3, 1); G.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 10, life, max: life, col, size, kind: kind || 'spark' }); }
+function addPart(x, y, col, spd, life, size, kind) { if (G.parts.length > 500) return; const a = RNG.cosmetic() * TAU, v = spd * crand(0.3, 1); G.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 10, life, max: life, col, size, kind: kind || 'spark' }); }
 function addBurst(x, y, col, n) { for (let i = 0; i < n; i++) addPart(x, y, col, 140, 0.7, 2.5); }
 function addRing(x, y, col, r0, r1, life, w, kind) { if (G.rings.length > 40) G.rings.shift(); G.rings.push({ x, y, col, r0, r1, t: 0, life, w: w || 2, kind: kind || 'circle' }); }
 function log(text, kind) { if (!G) return; G.logs.push({ text, kind: kind || '', t: 0 }); if (G.logs.length > 6) G.logs.shift(); }
@@ -942,7 +950,7 @@ function updHollow(h, dt) {
   if (L.seen && !h.seenOnce) { h.seenOnce = true; emit('hollowSeen', { h }); }
   if (L.focus) {
     h.burn += dt * (h.kind === 'veiled' ? 0.33 : 1);
-    if (Math.random() < 0.5) addPart(h.x + rand(-8, 8), h.y + rand(-8, 8), '#ffb35c', 30, 0.4, 2, 'ember');
+    if (RNG.cosmetic() < 0.5) addPart(h.x + crand(-8, 8), h.y + crand(-8, 8), '#ffb35c', 30, 0.4, 2, 'ember');
     emit('burning', { h });
     if (h.burn >= 1.1) { dissolve(h, 'lantern'); return; }
   } else h.burn = Math.max(0, h.burn - dt * 0.6);
@@ -1161,11 +1169,11 @@ function updFlares(dt) {
     if (!f.burst) {
       f.t += dt; const k = Math.min(1, f.t / f.dur);
       f.x = lerp(f.sx, f.tx, k); f.y = lerp(f.sy, f.ty, k); f.h = Math.sin(k * Math.PI) * 26;
-      if (Math.random() < 0.8) addPart(f.x, f.y - f.h, '#ffb08a', 30, 0.35, 1.8);
+      if (RNG.cosmetic() < 0.8) addPart(f.x, f.y - f.h, '#ffb08a', 30, 0.35, 1.8);
       if (k >= 1) { f.burst = true; f.life = f.max; f.h = 0; flareBurst(f); }
     } else if (f.life > 0) {
       f.life -= dt;
-      if (Math.random() < 0.6) addPart(f.x + rand(-4, 4), f.y + rand(-4, 4), Math.random() < 0.5 ? '#ffe2b8' : '#ff7a4c', 60, 0.5, 2);
+      if (RNG.cosmetic() < 0.6) addPart(f.x + crand(-4, 4), f.y + crand(-4, 4), RNG.cosmetic() < 0.5 ? '#ffe2b8' : '#ff7a4c', 60, 0.5, 2);
     } else f.after -= dt;
   }
   G.flares = G.flares.filter(f => !f.burst || f.life > 0 || f.after > 0);
@@ -1592,7 +1600,7 @@ function drawClosedDoor(k, B, fresh) {   // a sealed doorway: a heavier slab wit
 function renderZone(dt) {
   const Z = G.Z, P = G.p, B = BIOMES[Z.z.biome] || BIOMES[0];
   let shx = 0, shy = 0;
-  if (G.shake > 0) { if (S.shake && S.motion) { shx = rand(-G.shake, G.shake) * 0.6; shy = rand(-G.shake, G.shake) * 0.6; } G.shake = Math.max(0, G.shake - dt * 30); }
+  if (G.shake > 0) { if (S.shake && S.motion) { shx = vrand(-G.shake, G.shake) * 0.6; shy = vrand(-G.shake, G.shake) * 0.6; } G.shake = Math.max(0, G.shake - dt * 30); }
   const zoom = G.zoom;
   G.view = { ox: W / 2 - G.cam.x * zoom + shx, oy: H / 2 - G.cam.y * zoom + shy, zoom };
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
@@ -1653,7 +1661,7 @@ function drawDark() {
   d.fillRect(0, 0, dark.width, dark.height);
   d.globalCompositeOperation = 'destination-out';
   d.setTransform(DPR * v.zoom * ms, 0, 0, DPR * v.zoom * ms, v.ox * DPR * ms, v.oy * DPR * ms);
-  const fl = S.flicker && S.motion ? (G.flicker > 0 ? 0.74 + Math.random() * 0.26 : 0.96 + 0.04 * Math.sin(G.t * 23) * Math.sin(G.t * 7)) : 1;
+  const fl = S.flicker && S.motion ? (G.flicker > 0 ? 0.74 + RNG.visual() * 0.26 : 0.96 + 0.04 * Math.sin(G.t * 23) * Math.sin(G.t * 7)) : 1;
   const low = S.flicker && G.p.warmth / G.p.maxW < 0.3 ? 0.84 + 0.16 * Math.sin(G.t * 9) : 1;
   for (const L of G.lights) {
     if (!L.poly) continue;
@@ -1704,7 +1712,7 @@ function drawResidue(B) {   // aftermath of a change nobody saw: scrape marks an
       else { ctx.moveTo(c.x + i * 7, c.y - 26); ctx.quadraticCurveTo(c.x + i * 7 + 3, c.y, c.x + i * 7, c.y + 26); }
     }
     ctx.stroke();
-    if (age < 25 && Math.random() < 0.3) G.parts.push({ x: c.x + rand(-20, 20), y: c.y + rand(-20, 20), vx: rand(-4, 4), vy: rand(2, 8), life: 1.4, max: 1.4, col: rgb(B.mineral, 1, 1), size: 1.6, kind: 'dust' });
+    if (age < 25 && RNG.cosmetic() < 0.3) G.parts.push({ x: c.x + crand(-20, 20), y: c.y + crand(-20, 20), vx: crand(-4, 4), vy: crand(2, 8), life: 1.4, max: 1.4, col: rgb(B.mineral, 1, 1), size: 1.6, kind: 'dust' });
   }
 }
 
@@ -1783,7 +1791,7 @@ function drawSanctuary() {   // the travelling reliquary: wood, brass, patched c
 }
 function breath(s) { return 0.5 + 0.5 * Math.cos(sigPhase(s) * TAU); }
 function drawFigure(o, escort) {   // a person: crouched, breathing, holding a candle; turns toward your light
-  const P = G.p, j = o.shakeT > 0 ? rand(-1.5, 1.5) : 0, x = o.x + j, y = o.y;
+  const P = G.p, j = o.shakeT > 0 ? vrand(-1.5, 1.5) : 0, x = o.x + j, y = o.y;
   const face = Math.atan2(P.y - y, P.x - x), br = escort ? 0.5 : breath(o);
   shadow(x, y + 7, 9, 3.2);
   if (!escort && o.trailFrom && o.clues && o.clues.moved) {   // the ledger noted it moved: show the drag marks you saw
@@ -1864,7 +1872,7 @@ function drawPlayer() {   // the Warden: hooded, cloaked, lantern held out on a 
 function drawFlareBody(f) {
   if (f.strike > 0) { const P = G.p; ctx.fillStyle = '#fff0d8'; ctx.beginPath(); ctx.arc(P.x + Math.cos(P.aim) * 12, P.y + Math.sin(P.aim) * 12, 2 + (0.14 - f.strike) * 20, 0, TAU); ctx.fill(); return; }
   if (!f.burst) { ctx.fillStyle = '#ff9a6a'; ctx.beginPath(); ctx.arc(f.x, f.y - f.h, 3, 0, TAU); ctx.fill(); return; }
-  if (f.life > 0) { ctx.fillStyle = '#fff4e4'; ctx.beginPath(); ctx.arc(f.x, f.y, 3.5 + Math.random() * 1.2, 0, TAU); ctx.fill(); ctx.strokeStyle = '#5a2a1a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(f.x - 5, f.y + 4); ctx.lineTo(f.x + 5, f.y + 2); ctx.stroke(); }
+  if (f.life > 0) { ctx.fillStyle = '#fff4e4'; ctx.beginPath(); ctx.arc(f.x, f.y, 3.5 + RNG.visual() * 1.2, 0, TAU); ctx.fill(); ctx.strokeStyle = '#5a2a1a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(f.x - 5, f.y + 4); ctx.lineTo(f.x + 5, f.y + 2); ctx.stroke(); }
 }
 function drawGlows() {
   const t = G.t;
@@ -1897,7 +1905,7 @@ on((type, d) => {
     case 'rescue': addRing(d.s.x, d.s.y, 'rgba(255,210,150,0.9)', 8, 70, 0.8, 2); break;
     case 'joined': addRing(G.sanct.x, G.sanct.y - 10, 'rgba(255,210,150,0.9)', 30, 150, 1.1, 3); break;
     case 'dissolve': addRing(d.h.x, d.h.y, 'rgba(20,24,30,0.9)', d.h.r * 2.5, 2, 0.35, 3); break;
-    case 'doorDiscovered': { const c = doorCenter(d.k); for (let i = 0; i < 14; i++) G.parts.push({ x: c.x + rand(-18, 18), y: c.y + rand(-18, 18), vx: rand(-10, 10), vy: rand(-4, 10), life: 1.6, max: 1.6, col: '#c9d6d0', size: 1.8, kind: 'dust' }); break; }
+    case 'doorDiscovered': { const c = doorCenter(d.k); for (let i = 0; i < 14; i++) G.parts.push({ x: c.x + crand(-18, 18), y: c.y + crand(-18, 18), vx: crand(-10, 10), vy: crand(-4, 10), life: 1.6, max: 1.6, col: '#c9d6d0', size: 1.8, kind: 'dust' }); break; }
     case 'mimicReveal': addRing(d.x, d.y, 'rgba(160,120,220,0.9)', 6, 90, 0.9, 2); break;
     case 'packDrop': addRing(d.x, d.y, 'rgba(255,196,107,0.8)', 6, 40, 0.8, 2); break;
   }
@@ -2285,7 +2293,7 @@ function drawMinimap() {   // a pocket chart: rooms seen, passages remembered, w
 }
 
 /* ===================== menu backdrop: the Sanctuary walking a drowned skyline ===================== */
-const motes = Array.from({ length: 50 }, () => ({ x: Math.random(), y: Math.random(), s: rand(0.6, 2), v: rand(0.004, 0.015), p: Math.random() * TAU }));
+const motes = Array.from({ length: 50 }, () => ({ x: RNG.cosmetic(), y: RNG.cosmetic(), s: crand(0.6, 2), v: crand(0.004, 0.015), p: RNG.cosmetic() * TAU }));
 const SKY = (() => {   // a drowned skyline, painted once
   const c = mkCanvas(1600, 400), g = c.getContext('2d'), r = mulberry32(99);
   for (const [base, col, n] of [[260, '#0c1520', 16], [300, '#0a111a', 12]]) {
@@ -2480,9 +2488,9 @@ function auInit() {
     for (const k of ['sfx', 'voice', 'ui']) { AU.bus[k] = gain(0); AU.bus[k].connect(AU.master); }
     // a drowned hall: generated impulse response, made once
     const len = Math.floor(c.sampleRate * 2.6), ir = c.createBuffer(2, len, c.sampleRate);
-    for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6) * (i < 400 ? i / 400 : 1); }
+    for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (RNG.audio() * 2 - 1) * Math.pow(1 - i / len, 2.6) * (i < 400 ? i / 400 : 1); }
     const conv = c.createConvolver(); conv.buffer = ir; AU.send = gain(1); AU.send.connect(conv); const rv = gain(0.45); conv.connect(rv); rv.connect(AU.master);
-    const nl = c.sampleRate * 2, nb = c.createBuffer(1, nl, c.sampleRate), nd = nb.getChannelData(0); for (let i = 0; i < nl; i++) nd[i] = Math.random() * 2 - 1; AU.noise = nb;
+    const nl = c.sampleRate * 2, nb = c.createBuffer(1, nl, c.sampleRate), nd = nb.getChannelData(0); for (let i = 0; i < nl; i++) nd[i] = RNG.audio() * 2 - 1; AU.noise = nb;
     for (const k of LAYERS) { AU.layer[k] = gain(0); AU.layer[k].connect(AU.bus.music); AU.levels[k] = 0; }
     // continuous danger bed: a trembling string-like band and a low rumble, faded by proximity
     const trem = gain(0), lfo = c.createOscillator(); lfo.frequency.value = 7; const lfoAmt = gain(0.5); lfo.connect(lfoAmt); lfoAmt.connect(trem.gain);
@@ -2541,7 +2549,7 @@ function noise(dur, o = {}) {
   const v = o.vol ?? 0.1, a = o.attack || 0.004;
   g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(Math.max(0.0002, v), t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   s.connect(fl); fl.connect(g); out(g, o, nodes);
-  s.start(t, Math.random() * 1.2); s.stop(t + dur + 0.05); track(s, nodes);
+  s.start(t, RNG.audio() * 1.2); s.stop(t + dur + 0.05); track(s, nodes);
 }
 function gate(k, gap) { if (!AU.ctx) return false; const t = AU.ctx.currentTime; if (t - (AU.last[k] || -9) < gap) return false; AU.last[k] = t; return true; }
 function duck(level, secs) { if (!AU.ctx) return; ramp(AU.duck.gain, level, 0.06); AU.duckT = Math.max(AU.duckT, AU.ctx.currentTime + secs); }
@@ -2585,7 +2593,7 @@ function playBeat(i, t, st) {
   // 2 sanctuary warmth: a slow chord that breathes in each bar
   if (bi === 0) chord.forEach((m, k) => tone(mt(m), 4.4, { type: 'triangle', vol: 0.045, attack: 0.9, lp: 900, bus: L.warmth, rev: 0.25, at: t + k * 0.02 }));
   // 3 exploration: sparse glass bells in the drowned hall
-  if (bi !== 0 && Math.random() < 0.38) { const n = BELL[Math.floor(Math.random() * BELL.length)]; tone(mt(n), 2.6, { vol: 0.04, bus: L.explore, rev: 0.7, at: t + (Math.random() < 0.3 ? 0.5 : 0) }); tone(mt(n) * 2.01, 1.2, { vol: 0.012, bus: L.explore, rev: 0.7, at: t }); }
+  if (bi !== 0 && RNG.audio() < 0.38) { const n = BELL[Math.floor(RNG.audio() * BELL.length)]; tone(mt(n), 2.6, { vol: 0.04, bus: L.explore, rev: 0.7, at: t + (RNG.audio() < 0.3 ? 0.5 : 0) }); tone(mt(n) * 2.01, 1.2, { vol: 0.012, bus: L.explore, rev: 0.7, at: t }); }
   // 4 instability: a detuned cluster that slides, when the architecture has just moved nearby
   if (bi === 0 && AU.instab > 0.08) for (const d of [-14, 9]) tone(mt(50), 3.6, { type: 'sawtooth', detune: d, slide: mt(49), vol: 0.035, bp: 640, q: 2, attack: 1.2, bus: L.instab, rev: 0.4, at: t });
   // 5 low-ember tension: an off-beat low figure
@@ -2609,14 +2617,14 @@ function audioTick(dt) {
   else AU.nextBeat = now + 0.2;
   // ambience: drips and distant groans, rarer outside the city
   const zone = G && state === 'zone';
-  if (now > AU.dripT) { AU.dripT = now + rand(0.6, 2.4) * (zone ? 1 : 2.5); const f = rand(1400, 2600); tone(f, 0.25, { slide: f * 0.6, vol: rand(0.015, 0.045), pan: rand(-0.9, 0.9), bus: AU.bus.amb, rev: 0.8 }); }
-  if (zone && now > AU.groanT) { AU.groanT = now + rand(9, 18) * (1 - G.dim * 0.5); noise(3.2, { f: 170, fs: 90, vol: 0.14, attack: 1.2, bus: AU.bus.amb, pan: rand(-0.7, 0.7), rev: 0.5 }); tone(rand(46, 62), 3, { slide: rand(38, 44), vol: 0.07, attack: 1, bus: AU.bus.amb, rev: 0.5 }); }
+  if (now > AU.dripT) { AU.dripT = now + arand(0.6, 2.4) * (zone ? 1 : 2.5); const f = arand(1400, 2600); tone(f, 0.25, { slide: f * 0.6, vol: arand(0.015, 0.045), pan: arand(-0.9, 0.9), bus: AU.bus.amb, rev: 0.8 }); }
+  if (zone && now > AU.groanT) { AU.groanT = now + arand(9, 18) * (1 - G.dim * 0.5); noise(3.2, { f: 170, fs: 90, vol: 0.14, attack: 1.2, bus: AU.bus.amb, pan: arand(-0.7, 0.7), rev: 0.5 }); tone(arand(46, 62), 3, { slide: arand(38, 44), vol: 0.07, attack: 1, bus: AU.bus.amb, rev: 0.5 }); }
   if (!zone) return;
   // presence: a heard voice breathes at random until you have recorded its pulse
   for (const s of G.signals) {
     if (!s.heard || s.clues.pulse) continue;
     const d = Math.hypot(s.x - G.p.x, s.y - G.p.y);
-    if (d < 280 && now > (AU.breathT[s.id] || 0)) { AU.breathT[s.id] = now + rand(1.6, 3.4); sndBreath(clamp((s.x - G.p.x) / 300, -1, 1), 0.05 * (1 - d / 280)); }
+    if (d < 280 && now > (AU.breathT[s.id] || 0)) { AU.breathT[s.id] = now + arand(1.6, 3.4); sndBreath(clamp((s.x - G.p.x) / 300, -1, 1), 0.05 * (1 - d / 280)); }
   }
   // each adaptation has its own sound while it moves near you
   for (const h of G.hollows) {
@@ -2695,7 +2703,7 @@ on((type, d) => {
     case 'hurt': tone(160, 0.4, { type: 'sawtooth', vol: 0.12, slide: 55, lp: 700 }); noise(0.25, { f: 700, vol: 0.16 }); duck(0.5, 0.8); break;
     case 'falling': for (let k = 0; k < 4; k++) tone(mt(50 - k * 3), 0.9, { type: 'triangle', vol: 0.06, lp: 800, at: now + k * 0.3, rev: 0.6 }); AU.silenceUntil = now + 2.2; ramp(AU.duck.gain, 0.05, 0.3); break;
     case 'carried': [62, 65, 69].forEach((m, k) => tone(mt(m), 1.6, { type: 'triangle', vol: 0.05, attack: 0.3, rev: 0.6, at: now + 0.3 + k * 0.25 })); caption(`${d.crew.name} carries you home`, 'env'); break;
-    case 'packDrop': tone(90, 0.35, { vol: 0.14, slide: 55 }); for (let k = 0; k < 4; k++) tone(rand(1800, 2600), 0.12, { vol: 0.02, at: now + 0.1 + k * 0.05 }); caption('Your pack fell', 'env'); break;
+    case 'packDrop': tone(90, 0.35, { vol: 0.14, slide: 55 }); for (let k = 0; k < 4; k++) tone(arand(1800, 2600), 0.12, { vol: 0.02, at: now + 0.1 + k * 0.05 }); caption('Your pack fell', 'env'); break;
     case 'packRecovered': case 'bank': [60, 64, 67].forEach((m, k) => tone(mt(m + 12), 0.6, { type: 'triangle', vol: 0.05, at: now + k * 0.07, bus: AU.bus.ui })); break;
     case 'voice': {
       murmur(d.s, clamp(d.dx / 300, -1, 1)); duck(0.4, 2.2);
@@ -2717,7 +2725,7 @@ on((type, d) => {
     case 'taken': noise(1, { ft: 'bandpass', f: 500, fs: 3000, vol: 0.14 }); tone(mt(47), 1.2, { type: 'sawtooth', vol: 0.07, lp: 800 }); caption(`${d.e.name} was taken`, 'env'); break;
     case 'shaken': noise(0.3, { ft: 'bandpass', f: 1600, q: 2, vol: 0.08, bus: AU.bus.voice }); break;
     case 'flareStrike': noise(0.14, { ft: 'bandpass', f: 3000, q: 2, vol: 0.1 }); noise(0.35, { ft: 'bandpass', f: 800, fs: 2400, vol: 0.08, at: now + 0.14 }); break;
-    case 'flareBurst': noise(0.9, { f: 6000, fs: 500, vol: 0.22, prio: true, rev: 0.4 }); tone(740, 0.5, { vol: 0.05, slide: 370 }); for (let k = 0; k < 8; k++) noise(0.05, { ft: 'highpass', f: 4000, vol: 0.03, at: now + 0.3 + k * rand(0.12, 0.25) }); caption('Flare', 'env', 'flare', 1); break;
+    case 'flareBurst': noise(0.9, { f: 6000, fs: 500, vol: 0.22, prio: true, rev: 0.4 }); tone(740, 0.5, { vol: 0.05, slide: 370 }); for (let k = 0; k < 8; k++) noise(0.05, { ft: 'highpass', f: 4000, vol: 0.03, at: now + 0.3 + k * arand(0.12, 0.25) }); caption('Flare', 'env', 'flare', 1); break;
     case 'beaconPlaced': tone(70, 0.3, { vol: 0.18, slide: 45, prio: true }); noise(0.12, { f: 1200, vol: 0.08 }); tone(1318, 1.6, { vol: 0.06, at: now + 0.12, rev: 0.6 }); tone(1975, 1.2, { vol: 0.025, at: now + 0.14, rev: 0.6 }); tone(mt(38), 2.2, { type: 'triangle', vol: 0.05, attack: 0.4, at: now + 0.2 }); break;
     case 'beaconSnuffed': noise(0.3, { ft: 'highpass', f: 3500, vol: 0.08 }); tone(1318, 0.5, { vol: 0.04, slide: 400 }); caption('A beacon went out', 'env'); break;
     case 'beaconLifted': case 'empty': tone(300, 0.08, { type: 'triangle', vol: 0.05, bus: AU.bus.ui }); break;
@@ -3457,10 +3465,11 @@ if (DEBUG) {
   window.MS = {
     get G() { return G; }, get CH() { return CH; }, get state() { return state; }, get AU() { return AU; }, get S() { return S; }, events, audioStats, scoreState, get captions() { return CAP.list.map(c => c.kind + ': ' + c.text); },
     depart, enterZone, update, emit, tryShift, spawnHollowAt, doorPinned, doorLit, homeDist, keyLabel,
-    seed(n) { Math.random = mulberry32(n); },
+    seed(n) { Math.random = mulberry32(n); seedStreams((n ^ 0x9e3779b9) >>> 0); },
     teleport(x, y) { G.p.x = x; G.p.y = y; G.cam.x = x; G.cam.y = y; },
     guide() { return guideState(); },
     QUALITY, stall(ms) { debugStall = ms; }, get frameWorkMs() { return +workAvg.toFixed(2); },
+    rng: RNG,
     get r3() { return R3.status; }, get r3Error() { return R3.error; },
     r3Doors() { return R3.doors ? R3.doors.map((d, k) => ({ k, shown: d.shown, label: d.label, slab: d.slab.visible, glow: d.glowMat.uniforms.uA.value, brackets: d.brackets.visible })) : null; },
     r3Project(x, y, h) { return r3Project(x, y, h); }
