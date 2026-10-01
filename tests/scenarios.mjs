@@ -260,7 +260,7 @@ await scenario('fall: pack drops where you fell, crew scarred, guidance points t
   assert(r.guide === 'carried', 'guidance explains the changed situation, got ' + r.guide);
   await pg.shot('A-after-fall');
   await pg.evaluate(() => { const p = MS.G.items.find(i => i.kind === 'pack'); MS.G.hollows.forEach(h => h.dead = true); MS.teleport(p.x, p.y + 1); });
-  await pg.keyboard.down('e'); await pg.waitForTimeout(700); await pg.keyboard.up('e');
+  await pg.keyboard.down('e'); await gameWait(pg, 0.7); await pg.keyboard.up('e');
   const back = await pg.evaluate(() => ({ carry: MS.G.p.carryE, rec: MS.CH.exp.stats.packRecovered, target: MS.G.target && MS.G.target.kind, fall: MS.G.fallT, warm: MS.G.p.warmth, state: MS.state }));
   assert(back.carry >= 7 && back.rec === 1, 'pack recovered: ' + JSON.stringify(back));
 }, { seed: 18 });
