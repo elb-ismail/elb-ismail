@@ -445,6 +445,209 @@ await scenario('3d brackets: a pinned but unlit doorway shows brackets only duri
   assert(!r.after.brackets && r.after.seenAgo > 0.1, 'after the flash, the unlit pinned doorway shows no brackets: ' + JSON.stringify(r.after));
 }, { query: '&r3d=1', seed: 11 });
 
+await scenario('3d step 4: unlit Hollows, mimics, escorts and loot read back at the unlit-floor level; lit ones show', async pg => {
+  await pg.waitForFunction(() => MS.r3 === 'ready' || MS.r3 === 'failed', null, { timeout: 15000 });
+  await beginFirstPlace(pg);
+  await pg.waitForTimeout(600);
+  const r = await pg.evaluate(() => {
+    const G = MS.G, Z = G.Z, east = Z.dockR + 1, P = G.p;
+    const rc = { x: ((east % Z.RW) * 9 + 5) * 32, y: (Math.floor(east / Z.RW) * 9 + 5) * 32 };
+    // the north part of the room east of the dock, lantern aimed north: the south of the room and its neighbours are dark
+    MS.teleport(rc.x, rc.y - 96); G.debugAim = -Math.PI / 2;
+    const hol = G.hollows[0], mimic = G.signals.find(s => !s.real), kinds = [...new Set(G.items.map(i => i.kind))];
+    const items = kinds.map(k => G.items.find(i => i.kind === k));
+    G.hollows.slice(1).forEach(h => h.dead = true);
+    G.escorts.push({ name: 'Test', trait: G.signals.find(s => s.real).trait, x: P.x, y: P.y, shaken: true, shakeT: 99, home: false, walk: 0, ang: 0 });
+    const esc = G.escorts[G.escorts.length - 1];
+    const ents = [['hollow', hol, 0.15], ['mimic', mimic, 0.35], ['escort', esc, 0.35], ...items.map(i => ['item:' + i.kind, i, { ember: 0.15, salvage: 0.08, relic: 0.32 }[i.kind] || 0.22])]   // sample height: each mesh's centre;
+    MS.update(0.001); MS.r3Read([]);
+    // park everything on open floor that is off screen, so the spots below are bare floor
+    // (each on its own tile: a Hollow touching an escort dissolves)
+    const pk = [];
+    for (let i = 0; i < Z.GW * Z.GH && pk.length < ents.length; i++) { const x = (i % Z.GW + 0.5) * 32, y = (Math.floor(i / Z.GW) + 0.5) * 32, p = MS.r3Project(x, y, 0); if (!Z.wall[i] && (p.x < -200 || p.y < -200 || p.x > innerWidth + 200 || p.y > innerHeight + 200) && !pk.some(q => Math.hypot(q.x - x, q.y - y) < 64)) pk.push({ x, y }); }
+    ents.forEach(([, e], i) => { e.x = pk[i].x; e.y = pk[i].y; }); hol.emerge = 0;
+    MS.update(0.001); MS.update(0.001); MS.r3Read([]);
+    // dark spots: open floor whose whole neighbourhood is unlit, on screen, seen directly, spaced apart. The Hollow's
+    // spot must also be out of eye range (260 px, or no clear line), since eyes in the dark are allowed there.
+    const wallOn = (x1, y1) => { for (let s = 0; s <= 1; s += 1 / 64) { const x = P.x + (x1 - P.x) * s, y = P.y + (y1 - P.y) * s; if (Z.wall[Math.floor(x / 32) + Math.floor(y / 32) * Z.GW]) return true; } return false; };
+    const cand = [];
+    for (let ty = 0; ty < Z.GH; ty++) for (let tx = 0; tx < Z.GW; tx++) {
+      if (Z.wall[tx + ty * Z.GW]) continue;
+      const x = (tx + 0.5) * 32, y = (ty + 0.5) * 32, p = MS.r3Project(x, y, 0);
+      if (p.behind || p.x < 60 || p.x > innerWidth - 60 || p.y < 150 || p.y > innerHeight - 100) continue;
+      let m = 0; for (const dx of [-40, 0, 40]) for (const dy of [-40, 0, 40]) m = Math.max(m, MS.r3MaskAt(x + dx, y + dy));
+      if (m > 0.05 || !MS.r3FloorVisible(x, y).visible) continue;
+      cand.push({ x, y, noEyes: Math.hypot(x - P.x, y - P.y) > 270 || wallOn(x, y) });
+    }
+    const spots = [], far = cand.find(c => c.noEyes);
+    if (far) spots.push(far);
+    for (const c of cand) if (spots.length < ents.length && !spots.some(s => Math.hypot(s.x - c.x, s.y - c.y) < 56)) spots.push(c);
+    if (!far || spots.length < ents.length) return { spots: spots.length, need: ents.length, cand: cand.length, far: !!far };
+    // the same pixels with the entities parked elsewhere (bare unlit floor), then with each entity standing there
+    const pts = ents.map(([, , h], i) => { const p = MS.r3Project(spots[i].x, spots[i].y, h); return [p.x, p.y]; });
+    const floor = MS.r3Read(pts);
+    ents.forEach(([, e], i) => { e.x = spots[i].x; e.y = spots[i].y; }); hol.emerge = 0;
+    MS.update(0.001); MS.update(0.001);
+    ents.forEach(([, e], i) => { e.x = spots[i].x; e.y = spots[i].y; });   // undo the 2 ms of drift before drawing
+    const dark = MS.r3Read(pts), info = MS.r3Entities(), darkVis = ents.map(([, e]) => !!e.vis && e !== esc);
+    if (!G.hollows.includes(hol)) return { lostHollow: true };
+    const hi = info.hollows[G.hollows.indexOf(hol)];
+    // positive control: the same entities a few steps into the lantern's light (Warden moved south so they stay in the room)
+    MS.teleport(rc.x, rc.y + 60);
+    const lit = ents.map(([, , h], i) => ({ x: P.x + (i - (ents.length - 1) / 2) * 18, y: P.y - 90 - (i % 2) * 34, h }));   // well inside the cone
+    ents.forEach(([, e], i) => { e.x = lit[i].x; e.y = lit[i].y; }); hol.emerge = 0;
+    MS.update(0.001); MS.update(0.001);
+    ents.forEach(([, e], i) => { e.x = lit[i].x; e.y = lit[i].y; });
+    MS.r3Read([]);
+    const lpts = lit.map(l => { const p = MS.r3Project(l.x, l.y, l.h); return [p.x, p.y]; });
+    const litL = MS.r3Read(lpts), info2 = MS.r3Entities();
+    return {
+      rows: ents.map(([n], i) => ({ n, floor: +floor[i].toFixed(1), dark: +dark[i].toFixed(1), lit: +litL[i].toFixed(1) })),
+      hollowDark: hi, hollowLit: info2.hollows[G.hollows.indexOf(hol)],
+      darkVis, litVis: ents.map(([n, e]) => [n, e === esc || !!e.vis]), mimicLit: !!info2.figs[G.signals.indexOf(mimic)].shown
+    };
+  });
+  assert(!r.lostHollow, 'setup: the Hollow under test is still in the place');
+  assert(r.rows, 'enough dark floor on screen for every entity: ' + JSON.stringify(r));
+  if (process.env.VERBOSE) console.log('      readback', JSON.stringify(r.rows));
+  assert(!r.darkVis.some(Boolean), 'setup: the simulation counts them all unlit');
+  for (const row of r.rows) {
+    assert(row.dark < 12 && Math.abs(row.dark - row.floor) <= 2, 'unlit ' + row.n + ' reads back at the unlit floor level: ' + JSON.stringify(row));
+  }
+  assert(!r.hollowDark.body && !r.hollowDark.eyes, 'unlit Hollow beyond eye range: no body, no eyes: ' + JSON.stringify(r.hollowDark));
+  assert(r.litVis.every(v => v[1]), 'setup: the simulation counts the control positions lit: ' + JSON.stringify(r.litVis));
+  const brightest = r.rows.filter(x => x.n !== 'hollow');
+  for (const row of brightest) assert(row.lit > 24 && row.lit > row.dark + 12, 'positive control: lit ' + row.n + ' is drawn: ' + JSON.stringify(row));
+  assert(r.hollowLit.simVis && r.hollowLit.body && r.hollowLit.eyes, 'positive control: a lit Hollow shows its body: ' + JSON.stringify(r.hollowLit));
+  assert(r.mimicLit, 'positive control: a lit mimic is shown');
+  await pg.shot('3D-step4-entities');
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('3d step 4: Hollow eyes show in the dark only along a clear line within 260 px; no entity casts a shadow or reflects', async pg => {
+  await pg.waitForFunction(() => MS.r3 === 'ready' || MS.r3 === 'failed', null, { timeout: 15000 });
+  await beginFirstPlace(pg);
+  await pg.waitForTimeout(400);
+  const r = await pg.evaluate(() => {
+    const G = MS.G, Z = G.Z, east = Z.dockR + 1, P = G.p;
+    MS.teleport(((east % Z.RW) * 9 + 5) * 32, ((Math.floor(east / Z.RW) * 9 + 5) * 32)); G.debugAim = -Math.PI / 2;
+    const hol = G.hollows[0]; G.hollows.slice(1).forEach(h => h.dead = true);
+    MS.update(0.001); MS.r3Read([]);
+    const wallOn = (x0, y0, x1, y1) => { for (let s = 0; s <= 1; s += 1 / 64) { const x = x0 + (x1 - x0) * s, y = y0 + (y1 - y0) * s; if (Z.wall[Math.floor(x / 32) + Math.floor(y / 32) * Z.GW]) return true; } return false; };
+    let clear = null, blocked = null;
+    for (let ty = 0; ty < Z.GH && !(clear && blocked); ty++) for (let tx = 0; tx < Z.GW; tx++) {
+      if (Z.wall[tx + ty * Z.GW]) continue;
+      const x = (tx + 0.5) * 32, y = (ty + 0.5) * 32, d = Math.hypot(x - P.x, y - P.y);
+      let m = 0; for (const dx of [-40, 0, 40]) for (const dy of [-40, 0, 40]) m = Math.max(m, MS.r3MaskAt(x + dx, y + dy));
+      if (d < 120 || d > 230 || m > 0.05) continue;   // the whole neighbourhood dark: the simulation tests a Hollow's radius
+      if (!wallOn(P.x, P.y, x, y)) clear = clear || { x, y, d }; else if (wallOn(P.x, P.y, x, y) && d < 200) blocked = blocked || { x, y, d };
+    }
+    const at = s => { hol.x = s.x; hol.y = s.y; hol.emerge = 0; MS.update(0.001); hol.x = s.x; hol.y = s.y; MS.r3Read([]); return MS.r3Entities().hollows[G.hollows.indexOf(hol)]; };
+    const out = { clear, blocked, inClear: clear && at(clear), inBlocked: blocked && at(blocked) };
+    // nothing that represents a creature, person or object casts shadows, and nothing in the scene reflects
+    const E = MS.R3.E, roots = [E.warden, E.cone, E.sanct.g, ...[...E.hollows.values()].map(o => o.g), ...[...E.figs.values()].map(o => o.g), ...[...E.items.values()].map(o => o.g)];
+    let casters = 0, reflective = 0;
+    for (const root of roots) root.traverse(o => { if (o.castShadow) casters++; });
+    MS.R3.scene.traverse(o => { const ms = o.material ? [].concat(o.material) : []; for (const m of ms) if (m.envMap || m.isMeshStandardMaterial || m.isMeshPhysicalMaterial) reflective++; });
+    out.casters = casters; out.reflective = reflective; out.env = !!MS.R3.scene.environment;
+    return out;
+  });
+  assert(r.clear && r.blocked, 'setup: a dark spot in clear view and one behind a wall: ' + JSON.stringify(r));
+  assert(!r.inClear.simVis && !r.inClear.body && r.inClear.eyes && r.inClear.eyeA > 0, 'in the dark with a clear line: eyes only: ' + JSON.stringify(r.inClear));
+  assert(!r.inBlocked.simVis && !r.inBlocked.body && !r.inBlocked.eyes, 'behind a wall: nothing at all: ' + JSON.stringify(r.inBlocked));
+  assert(r.casters === 0, 'no entity casts a shadow (' + r.casters + ')');
+  assert(r.reflective === 0 && !r.env, 'no reflective materials or environment map');
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('3d step 4: across a played minute, no unlit Hollow body is ever drawn, in any frame', async pg => {
+  await pg.waitForFunction(() => MS.r3 === 'ready' || MS.r3 === 'failed', null, { timeout: 15000 });
+  await beginFirstPlace(pg);
+  const r = await pg.evaluate(() => {
+    const G = MS.G; let frames = 0, bodies = 0, eyesOnly = 0, bad = [];
+    for (let i = 0; i < 1800; i++) {
+      G.debugAim = Math.sin(i / 70) * 2.2; G.debugFocus = i % 300 > 240;
+      MS.update(1 / 30); if (i % 3) continue;
+      MS.r3Read([]); frames++;
+      const e = MS.r3Entities();
+      e.hollows.forEach((h, k) => {
+        if (!h) return;
+        if (h.body) bodies++; else if (h.eyes) eyesOnly++;
+        if (h.body && !h.simVis) bad.push({ i, k, why: 'body while unlit' });
+        if (h.eyes && !h.simVis && Math.hypot(h.x - G.p.x, h.y - G.p.y) >= 260) bad.push({ i, k, why: 'eyes beyond 260 px in the dark' });
+        if (h.body && MS.r3MaskAt(h.x, h.y) < 0.01) bad.push({ i, k, why: 'body where the light mask is black', m: MS.r3MaskAt(h.x, h.y) });
+      });
+    }
+    return { frames, bodies, eyesOnly, bad: bad.slice(0, 5), nBad: bad.length, hollows: G.hollows.length };
+  });
+  assert(r.frames > 500 && r.hollows > 0, 'setup: frames and Hollows to check: ' + JSON.stringify(r));
+  assert(r.nBad === 0, 'no Hollow body is drawn unlit: ' + JSON.stringify(r));
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('streams 3d: drawing 3D entities never calls Math.random and never changes what the simulation rolls', async pg => {
+  await pg.waitForFunction(() => MS.r3 === 'ready' || MS.r3 === 'failed', null, { timeout: 15000 });
+  await beginFirstPlace(pg);
+  const r = await pg.evaluate(() => {
+    const id = MS.G.node.id;
+    let simCalls = 0, visCalls = 0;
+    const run = render => {
+      MS.seed(77); MS.enterZone(id);
+      const G = MS.G, Z = G.Z, east = Z.dockR + 1; G.debugAim = 0.6;
+      MS.teleport(((east % Z.RW) * 9 + 5) * 32, (Math.floor(east / Z.RW) * 9 + 5) * 32);   // away from the Sanctuary, so the escort stays an escort
+      G.escorts.push({ name: 'Test', trait: G.signals.find(s => s.real).trait, x: G.p.x - 20, y: G.p.y, shaken: true, shakeT: 99, home: false, walk: 0, ang: 0 });   // a trembling escort
+      for (let i = 0; i < 900; i++) {
+        MS.update(1 / 30);
+        if (i % 120 === 60) MS.emit('flareBurst', { f: { x: G.p.x, y: G.p.y }, result: {} });
+        if (render) {
+          const mr = Math.random, vr = MS.rng.visual;
+          Math.random = () => { simCalls++; return mr(); };
+          MS.rng.visual = () => { visCalls++; return vr(); };
+          try { MS.r3Read([]); } finally { Math.random = mr; MS.rng.visual = vr; }
+        }
+      }
+      return JSON.stringify({ doors: G.Z.edges.map(e => e.open ? 1 : 0).join(''), hollows: G.hollows.map(h => [Math.round(h.x), Math.round(h.y), h.kind]), sig: G.signals.map(s => [Math.round(s.x), Math.round(s.y)]), esc: G.escorts.map(e => [Math.round(e.x), Math.round(e.y)]), dim: G.dim.toFixed(4), shiftT: G.shiftT.toFixed(4) });
+    };
+    const quiet = run(false), drawn = run(true);
+    return { same: quiet === drawn, simCalls, visCalls };
+  });
+  assert(r.visCalls > 0, 'control: 3D entity animation does draw from visualRng (the trembling escort): ' + JSON.stringify(r));
+  assert(r.simCalls === 0, '3D rendering never calls Math.random: ' + JSON.stringify(r));
+  assert(r.same, 'rendering 3D entities every frame leaves the simulation identical');
+}, { query: '&r3d=1', seed: 23 });
+
+await scenario('3d normal input: mouse aims through the 3D camera, keys walk the Warden to the next room, the camera follows', async pg => {
+  // no teleport, no debug aim, no state edits: only clicks, mouse movement and held keys
+  await pg.waitForFunction(() => MS.r3 === 'ready' || MS.r3 === 'failed', null, { timeout: 15000 });
+  await beginFirstPlace(pg);
+  const vw = 1280, vh = 780;
+  await pg.mouse.move(vw - 200, vh / 2 - 40);
+  await gameWait(pg, 0.3);
+  const a = await pg.evaluate(([mx, my]) => {
+    const P = MS.G.p, w = MS.r3ScreenToWorld(mx, my), e = MS.r3Entities().warden;
+    return { simAim: P.aim, want: Math.atan2(w.y - P.y, w.x - P.x), meshAim: e.aim, dx: e.x - P.x, dy: e.y - P.y, room: MS.R3.room, x0: P.x };
+  }, [vw - 200, vh / 2 - 40]);
+  const dAng = (p, q) => Math.abs(Math.atan2(Math.sin(p - q), Math.cos(p - q)));
+  assert(dAng(a.simAim, a.want) < 0.02, 'the lantern aims where the cursor meets the 3D floor: ' + JSON.stringify(a));
+  assert(dAng(a.meshAim, a.simAim) < 0.02 && Math.hypot(a.dx, a.dy) < 0.5, 'the Warden mesh stands and faces where the simulation says: ' + JSON.stringify(a));
+  await pg.keyboard.down('d');
+  try {
+    await pg.waitForFunction(r0 => MS.R3.room !== r0, a.room, { timeout: 20000 });
+  } finally { await pg.keyboard.up('d'); }
+  await pg.mouse.move(vw - 180, vh / 2 - 20);
+  await gameWait(pg, 0.3);
+  const b = await pg.evaluate(([mx, my]) => {
+    const G = MS.G, P = G.p, Z = G.Z, room = MS.R3.room, w = MS.r3ScreenToWorld(mx, my), e = MS.r3Entities().warden;
+    const t = MS.R3.target, cx = ((room % Z.RW) * 9 + 4.5), cz = (Math.floor(room / Z.RW) * 9 + 4.5);
+    const gp = MS.R3.E.glass.getWorldPosition(new (MS.R3.T.Vector3)()), gs = MS.r3Project(gp.x * 32, gp.z * 32, gp.y);
+    const ws = MS.r3Project(P.x, P.y, 0.6);
+    return { room, x: P.x, simRoom: Math.floor(P.y / 288) * Z.RW + Math.floor(P.x / 288), camOnRoom: Math.hypot(t.x - cx, t.z - cz),
+      simAim: P.aim, want: Math.atan2(w.y - P.y, w.x - P.x), dx: e.x - P.x, dy: e.y - P.y, glass: MS.r3Read([[gs.x, gs.y]])[0], ws };
+  }, [vw - 180, vh / 2 - 20]);
+  assert(b.x > a.x0 && b.room !== a.room && b.room === b.simRoom, 'the Warden walked east into the next room and the camera took that room: ' + JSON.stringify({ a, b }));
+  assert(b.camOnRoom < 0.6, 'the camera is centred on the new room: ' + JSON.stringify(b));
+  assert(dAng(b.simAim, b.want) < 0.02 && Math.hypot(b.dx, b.dy) < 0.5, 'after the camera move, aim and mesh still match the simulation: ' + JSON.stringify(b));
+  assert(b.ws.x > 0 && b.ws.x < vw && b.ws.y > 0 && b.ws.y < vh && b.glass > 60, 'the Warden and the lantern glass are on screen and bright: ' + JSON.stringify(b));
+  await pg.shot('3D-step4-normal-input');
+}, { query: '&r3d=1', seed: 11 });
+
 /* ---------- Milestone C: audio, captions, accessibility, persistence ---------- */
 await scenario('audio: nothing before a gesture; buses independent; mute; nodes released', async pg => {
   assert(await pg.evaluate(() => MS.audioStats()) === null, 'no AudioContext before the player interacts');

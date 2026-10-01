@@ -1290,7 +1290,8 @@ function readAim() {
   const P = G.p, moving = Math.hypot(P.vx, P.vy) > 20;
   if (G.debugAim != null) { P.aim = G.debugAim; P.focus = !!G.debugFocus; G.aimX = P.x + Math.cos(P.aim) * 240; G.aimY = P.y + Math.sin(P.aim) * 240; return; }   // tests only
   if (inputMode === 'mouse' && mouse.seen) {
-    G.aimX = G.cam.x + (mouse.x - W / 2) / G.zoom; G.aimY = G.cam.y + (mouse.y - H / 2) / G.zoom;
+    const w3 = r3Active() && R3.zone === G ? r3ScreenToWorld(mouse.x, mouse.y) : null;   // 3D: the cursor's ray meets the floor
+    if (w3) { G.aimX = w3.x; G.aimY = w3.y; } else { G.aimX = G.cam.x + (mouse.x - W / 2) / G.zoom; G.aimY = G.cam.y + (mouse.y - H / 2) / G.zoom; }
     P.aim = Math.atan2(G.aimY - P.y, G.aimX - P.x);
     P.focus = mouse.left || actionHeld('focus');
     return;
@@ -2707,8 +2708,9 @@ on((type, d) => {
     case 'packRecovered': case 'bank': [60, 64, 67].forEach((m, k) => tone(mt(m + 12), 0.6, { type: 'triangle', vol: 0.05, at: now + k * 0.07, bus: AU.bus.ui })); break;
     case 'voice': {
       murmur(d.s, clamp(d.dx / 300, -1, 1)); duck(0.4, 2.2);
-      const z = G.view ? G.view.zoom : 1, sx = W / 2 + (d.s.x - G.cam.x) * z, sy = H / 2 + (d.s.y - G.cam.y) * z;   // on screen (live camera, not last frame's view), the speech bubble is the caption
-      if (!onScreen(sx, sy, -20)) caption(`Voice ${dirWord(d.dx, d.dy)}, calling itself ${d.s.name}: "${d.s.line}"`, 'speech');
+      const z = G.view ? G.view.zoom : 1, p3 = r3Active() && R3.zone === G ? r3Project(d.s.x, d.s.y, 0.6) : null;   // on screen (live camera), the speech bubble is the caption
+      const sx = p3 ? p3.x : W / 2 + (d.s.x - G.cam.x) * z, sy = p3 ? p3.y : H / 2 + (d.s.y - G.cam.y) * z;
+      if (!onScreen(sx, sy, -20) || (p3 && p3.behind)) caption(`Voice ${dirWord(d.dx, d.dy)}, calling itself ${d.s.name}: "${d.s.line}"`, 'speech');
       break;
     }
     case 'pulse': if (d.s.clues.pulse) sndBreath(d.pan, 0.06 * (1 - d.d / 280)); break;   // only a recorded pulse is heard on its beat
@@ -2752,10 +2754,16 @@ const THREE_URL = 'https://esm.sh/three@0.186.1';
 const CAM3 = { pitch: 42 * Math.PI / 180, fov: 35, dist: 17 };
 const R3 = { want: /[?&]r3d=1/.test(location.search), status: 'off', T: null, renderer: null, scene: null, camera: null, canvas: null, error: '' };
 function r3Active() { return R3.status === 'ready'; }
+// Three.js gives every new object, geometry, material and texture a UUID drawn from Math.random, which is the
+// simulation's stream. Lend it the cosmetic stream whenever the 3D layer builds or draws, so 3D never shifts a roll.
+function r3Cosmetic(fn) {
+  const simRandom = Math.random; Math.random = RNG.cosmetic;
+  try { return fn(); } finally { Math.random = simRandom; }
+}
 function r3Start() {
   if (!R3.want || R3.status !== 'off') return;
   R3.status = 'loading';
-  import(THREE_URL).then(T => {
+  import(THREE_URL).then(T => r3Cosmetic(() => {
     const canvas = document.createElement('canvas');
     canvas.id = 'game3d'; canvas.setAttribute('aria-hidden', 'true');
     const gl = canvas.getContext('webgl2', { antialias: true });
@@ -2770,7 +2778,7 @@ function r3Start() {
     r3Resize();
     R3.status = 'ready';
     document.documentElement.classList.add('r3d');
-  }).catch(e => { R3.status = 'failed'; R3.error = String(e && e.message || e); console.warn('3D renderer unavailable, using 2D: ' + R3.error); });
+  })).catch(e => { R3.status = 'failed'; R3.error = String(e && e.message || e); console.warn('3D renderer unavailable, using 2D: ' + R3.error); });
 }
 function r3Resize() {
   if (!R3.renderer) return;
@@ -2843,9 +2851,11 @@ function maskify(mat) {
       '#include <project_vertex>\n vec4 mwp = vec4(transformed, 1.0);\n #ifdef USE_INSTANCING\n mwp = instanceMatrix * mwp;\n #endif\n vMaskXZ = (modelMatrix * mwp).xz;');
     sh.uniforms.uMaskBase = R3.maskU.uMaskBase;
     sh.fragmentShader = 'uniform sampler2D uMask; uniform vec2 uMaskSize; uniform float uMaskBase; varying vec2 vMaskXZ;\n' + sh.fragmentShader.replace('#include <opaque_fragment>',
-      '#include <opaque_fragment>\n vec3 lm = texture2D(uMask, vMaskXZ / uMaskSize).rgb;\n vec3 gl2 = max(lm - vec3(uMaskBase), 0.0);\n gl_FragColor.rgb = gl_FragColor.rgb * gl2 * 3.2 + gl2 * gl2 * 0.14 + diffuseColor.rgb * uMaskBase;');   // unlit: bare albedo at the base level, untouched by any light
+      '#include <opaque_fragment>\n vec3 lm = texture2D(uMask, vMaskXZ / uMaskSize).rgb;\n vec3 gl2 = max(lm - vec3(uMaskBase), 0.0);\n gl_FragColor.rgb = gl_FragColor.rgb * gl2 * 3.2 + gl2 * gl2 * 0.14 + diffuseColor.rgb * pow(uMaskBase, 2.2);');
+   // unlit: bare albedo at the base level, untouched by any light. 2D scales the sRGB colour by the base level; this
+   // runs in linear colour before sRGB encoding, so the base is raised to 2.2 to land on the same on-screen level.
   };
-  mat.customProgramCacheKey = () => 'mask1';
+  mat.customProgramCacheKey = () => 'mask2';
   return mat;
 }
 /* A fixed pool of Three.js lights (a constant count keeps shader programs stable): the lantern, the four nearest
@@ -2933,6 +2943,7 @@ function r3BuildZone() {
     return { grp, slab, slabMat, glow, glowMat, brackets, bracketMat, dust, dustAt: -99, shown: null, label: null };
   });
   R3.scene = scene; R3.zone = G; R3.floorTex = tex;
+  r3BuildEntities(scene);
   R3.target = new T.Vector3(); R3.room = -1;
 }
 function r3DoorLabel(k) {   // what this doorway may show right now; truth only while the simulation says it is lit
@@ -2986,12 +2997,16 @@ function r3Project(x, y, h) {   // sim position (px) to CSS pixels, for tests an
   return { x: (v.x + 1) / 2 * window.innerWidth, y: (1 - v.y) / 2 * window.innerHeight, behind: v.z > 1 };
 }
 function renderZone3d() {
+  r3Cosmetic(renderZone3dInner);
+}
+function renderZone3dInner() {
   if (R3.zone !== G) r3BuildZone();
   if (R3.mask.scale !== QUALITY.maskScale) r3MaskInit();   // the half-resolution fallback
   r3Camera();
   r3MaskDraw();
   r3UpdateLights();
   r3UpdateDoors();
+  r3UpdateEntities();
   R3.renderer.render(R3.scene, R3.camera);
 }
 function renderOverlay2d() {   // the 2D canvas becomes a transparent layer for the HUD
@@ -3015,6 +3030,209 @@ function r3FloorVisible(x, y) {   // tests: is this floor point the first thing 
   const hits = rc.intersectObjects(R3.scene.children, true).filter(h => h.object.visible && !h.object.isPoints && h.object.material && h.object.material.blending !== T3.AdditiveBlending && h.object.material.depthWrite !== false && !(h.object.parent && !h.object.parent.visible));
   return hits.length ? { visible: false, by: h0(hits[0]) } : { visible: true };
   function h0(h) { return (h.object.isInstancedMesh ? 'wall' : h.object.geometry.type) + '@' + h.point.y.toFixed(2); }
+}
+
+/* ----- Step 4: entities. Visibility follows the 2D renderer exactly:
+   Hollow body, survivors, mimics, loot: only while the simulation says they are lit (h.vis, s.vis, it.vis).
+   Hollow eyes in the dark: only with a clear line of sight within 260 px, fading with distance (drawEyes).
+   Escorts and the Warden: always drawn, under the light mask (near-black when unlit), as 2D draws them under its dark.
+   Nothing here casts shadows (an unlit figure must not reveal itself by a shadow on lit floor), and nothing here uses
+   Math.random: animation reads simulation state and time; the shaken escort's tremble uses visualRng. ----- */
+function r3Mat(c, extra) { return maskify(new R3.T.MeshLambertMaterial(Object.assign({ color: c }, extra || {}))); }
+function r3BuildEntities(scene) {
+  const T3 = R3.T, E = R3.E = { hollows: new Map(), figs: new Map(), items: new Map() };
+  // the Warden: cloak, hood, lantern on a short pole; the lantern glass is the light itself, so it is not masked
+  const w = new T3.Group();
+  const cloak = new T3.Mesh(new T3.ConeGeometry(0.42, 1.15, 12), r3Mat(0x1d2740)); cloak.position.y = 0.58;
+  const trim = new T3.Mesh(new T3.TorusGeometry(0.4, 0.03, 4, 16), r3Mat(0x8a95b3)); trim.rotation.x = Math.PI / 2; trim.position.y = 0.06;
+  const hood = new T3.Mesh(new T3.SphereGeometry(0.21, 12, 10), r3Mat(0x2e3a5c)); hood.position.y = 1.2;
+  const face = new T3.Mesh(new T3.SphereGeometry(0.12, 10, 8), r3Mat(0x10141f)); face.position.set(0.11, 1.18, 0);
+  const pole = new T3.Mesh(new T3.CylinderGeometry(0.025, 0.025, 0.55, 5), r3Mat(0x6b5a44)); pole.rotation.z = Math.PI / 2.4; pole.position.set(0.3, 0.9, 0);
+  const cage = new T3.Mesh(new T3.BoxGeometry(0.16, 0.2, 0.16), r3Mat(0x3a2e22));
+  const glass = new T3.Mesh(new T3.BoxGeometry(0.11, 0.14, 0.11), new T3.MeshBasicMaterial({ color: 0xffc46b }));
+  const lamp = new T3.Group(); lamp.add(cage, glass); lamp.position.set(0.52, 0.78, 0);
+  const body = new T3.Group(); body.add(cloak, trim, hood, face, pole, lamp);
+  w.add(body); scene.add(w);
+  // the visible lantern cone: additive, and masked, so it only shows where the simulation's light actually falls
+  const coneMat = maskify(new T3.MeshBasicMaterial({ color: 0xffd39a, transparent: true, opacity: 0.07, blending: T3.AdditiveBlending, depthWrite: false, side: T3.DoubleSide }));
+  const cone = new T3.Mesh(new T3.ConeGeometry(1, 1, 24, 1, true), coneMat);
+  cone.geometry.translate(0, -0.5, 0); cone.geometry.rotateZ(Math.PI / 2);   // apex at the origin, opening along +x
+  scene.add(cone);
+  Object.assign(E, { warden: w, wardenBody: body, lamp, glass, cone, coneMat });
+  r3BuildSanctuary(scene);
+}
+function r3Hollow(h) {   // an absence: a hole in the world with a disturbed rim; eyes separate so they can show alone
+  const T3 = R3.T;
+  const g = new T3.Group(), bodyG = new T3.Group();
+  const core = new T3.Mesh(new T3.SphereGeometry(0.36, 14, 10), r3Mat(0x010204)); core.scale.set(1, 1.35, 1); core.position.y = 0.48;
+  const shell = new T3.Mesh(new T3.SphereGeometry(0.45, 14, 10), maskify(new T3.MeshLambertMaterial({ color: 0x020306, transparent: true, opacity: 0.55, depthWrite: false })));
+  shell.scale.set(1, 1.3, 1); shell.position.y = 0.48;
+  const rimMat = maskify(new T3.MeshBasicMaterial({ color: 0x7896a0, transparent: true, opacity: 0.4 }));
+  const rim = new T3.Mesh(new T3.TorusGeometry(0.42, 0.025, 4, 24), rimMat); rim.rotation.x = Math.PI / 2; rim.position.y = 0.04;
+  bodyG.add(core, shell, rim);
+  if (h.kind === 'veiled') { const v = new T3.Mesh(new T3.ConeGeometry(0.35, 1.3, 10, 1, true), maskify(new T3.MeshBasicMaterial({ color: 0xd6deec, transparent: true, opacity: 0.25, side: T3.DoubleSide, depthWrite: false }))); v.rotation.z = Math.PI / 2; v.position.set(-0.7, 0.55, 0); bodyG.add(v); }
+  if (h.kind === 'gnawer') for (const s of [-1, 1]) { const j = new T3.Mesh(new T3.ConeGeometry(0.08, 0.55, 5), r3Mat(0x010204)); j.rotation.z = -Math.PI / 2; j.position.set(0.5, 0.35, s * 0.16); bodyG.add(j); }
+  if (h.kind === 'hushed') { const r = new T3.Mesh(new T3.TorusGeometry(0.22, 0.02, 4, 18), maskify(new T3.MeshBasicMaterial({ color: 0xc07bff, transparent: true, opacity: 0.5 }))); r.position.set(0.3, 0.55, 0); r.rotation.y = Math.PI / 2; bodyG.add(r); }
+  const eyeMat = new T3.MeshBasicMaterial({ color: h.kind === 'hushed' ? 0xc07bff : 0xe2ecec, transparent: true, opacity: 1, depthWrite: false });
+  const eyes = new T3.Group();
+  for (const s of [-1, 1]) { const e = new T3.Mesh(new T3.SphereGeometry(0.045, 8, 6), eyeMat); e.scale.set(1, h.kind === 'hushed' ? 0.4 : 0.7, 1.5); e.position.set(0.34, 0.62, s * 0.11); eyes.add(e); }
+  g.add(bodyG, eyes); R3.scene.add(g);
+  return { g, bodyG, core, shell, rim, rimMat, eyes, eyeMat };
+}
+function r3Figure(escort) {   // a crouched person with a candle; escorts lighter, survivors and mimics identical (fair)
+  const T3 = R3.T, g = new T3.Group();
+  const knees = new T3.Mesh(new T3.SphereGeometry(0.27, 12, 8), r3Mat(escort ? 0x8a6e52 : 0x6e5a48)); knees.scale.set(1, 0.7, 1); knees.position.y = 0.2;
+  const shoulders = new T3.Mesh(new T3.SphereGeometry(0.22, 12, 8), r3Mat(escort ? 0xa88a6a : 0x8a735c)); shoulders.scale.set(1, 0.75, 1.1); shoulders.position.y = 0.5;
+  const head = new T3.Mesh(new T3.SphereGeometry(0.13, 10, 8), r3Mat(escort ? 0xd8b894 : 0xc2a384)); head.position.set(0.04, 0.78, 0);
+  const hair = new T3.Mesh(new T3.SphereGeometry(0.1, 8, 6), r3Mat(0x2a211a)); hair.position.set(-0.05, 0.8, 0);
+  const candle = new T3.Mesh(new T3.CylinderGeometry(0.035, 0.035, 0.16, 6), r3Mat(0xd9cfb4)); candle.position.set(0.3, 0.1, 0.1);
+  const flame = new T3.Mesh(new T3.SphereGeometry(0.04, 6, 6), r3Mat(0xffcf85, { emissive: 0xffcf85, emissiveIntensity: 1 })); flame.scale.y = 1.6; flame.position.set(0.3, 0.24, 0.1);
+  const ring = new T3.Mesh(new T3.TorusGeometry(0.42, 0.02, 4, 24), maskify(new T3.MeshBasicMaterial({ color: 0xff6a74, transparent: true, opacity: 0.8 }))); ring.rotation.x = Math.PI / 2; ring.position.y = 0.03; ring.visible = false;
+  const upper = new T3.Group(); upper.add(shoulders, head, hair);
+  g.add(knees, upper, candle, flame, ring); R3.scene.add(g);
+  candle.visible = flame.visible = !escort;
+  return { g, upper, ring, escort };
+}
+function r3Item(it) {
+  const T3 = R3.T, g = new T3.Group();
+  if (it.kind === 'ember') {
+    for (const [ax, az, sc, rot] of [[-0.18, 0, 0.8, -0.3], [0.12, -0.05, 1.05, 0.2], [0, 0.12, 0.6, 0]]) {
+      const c = new T3.Mesh(new T3.ConeGeometry(0.09 * sc, 0.42 * sc, 5), r3Mat(0xff7a3a, { emissive: 0x7a2a12, emissiveIntensity: 0.6 }));
+      c.position.set(ax, 0.2 * sc, az); c.rotation.z = rot; g.add(c);
+    }
+  } else if (it.kind === 'salvage') {
+    const plate = new T3.Mesh(new T3.BoxGeometry(0.6, 0.08, 0.38), r3Mat(0x3c4552)); plate.position.y = 0.06; plate.rotation.y = -0.2;
+    const gear = new T3.Mesh(new T3.TorusGeometry(0.14, 0.04, 6, 12), r3Mat(0xb39a5e)); gear.position.set(0.28, 0.2, -0.15); gear.rotation.x = 1.2;
+    g.add(plate, gear);
+  } else if (it.kind === 'relic') {
+    const slate = new T3.Mesh(new T3.BoxGeometry(0.42, 0.62, 0.08), r3Mat(0xc9d8f2)); slate.position.y = 0.32; slate.rotation.set(-0.3, 0.12, 0);
+    g.add(slate);
+  } else {   // pack
+    const bag = new T3.Mesh(new T3.SphereGeometry(0.32, 12, 8), r3Mat(0x6e4a26)); bag.scale.set(1.1, 0.7, 0.8); bag.position.y = 0.22;
+    const flap = new T3.Mesh(new T3.BoxGeometry(0.36, 0.08, 0.3), r3Mat(0x9a6a36)); flap.position.y = 0.42;
+    g.add(bag, flap);
+  }
+  R3.scene.add(g);
+  return { g };
+}
+function r3BuildSanctuary(scene) {   // the walking reliquary: legs, planked body, stitched roof, lit windows, crew lanterns
+  const T3 = R3.T, S3 = new T3.Group(), wood = r3Mat(0x2b2119), brass = r3Mat(0xa88a52);
+  const legs = [];
+  for (const [lx, lz] of [[-1.35, 0.7], [-0.5, 0.85], [0.5, 0.85], [1.35, 0.7], [-1.35, -0.7], [1.35, -0.7]]) {
+    const upper = new T3.Mesh(new T3.CylinderGeometry(0.09, 0.11, 0.9, 6), r3Mat(0x3a2c1e)); upper.position.set(lx * 0.75, 0.75, lz * 0.75); upper.rotation.z = -lx * 0.18;
+    const knee = new T3.Mesh(new T3.SphereGeometry(0.09, 6, 6), brass); knee.position.set(lx * 0.95, 0.35, lz * 0.95);
+    S3.add(upper, knee); legs.push(upper);
+  }
+  const hull = new T3.Mesh(new T3.BoxGeometry(3.3, 1.0, 2.0), wood); hull.position.y = 1.55;
+  const roof = new T3.Mesh(new T3.CylinderGeometry(1.15, 1.15, 3.6, 16, 1, false, 0, Math.PI), r3Mat(0x4b3b3a)); roof.rotation.z = Math.PI / 2; roof.rotation.y = 0; roof.position.y = 2.05; roof.scale.set(1, 1, 0.8);
+  S3.add(hull, roof);
+  for (const bx of [-1.55, -0.55, 0.55, 1.55]) { const rib = new T3.Mesh(new T3.BoxGeometry(0.06, 1.05, 2.05), brass); rib.position.set(bx, 1.55, 0); S3.add(rib); }
+  const winMat = r3Mat(0xffc46b, { emissive: 0xffc46b, emissiveIntensity: 0.9 }), wins = [];
+  for (const wx of [-1.1, -0.4, 0.3]) { const w = new T3.Mesh(new T3.BoxGeometry(0.36, 0.36, 0.04), winMat); w.position.set(wx, 1.62, 1.02); S3.add(w); wins.push(w); }
+  const door = new T3.Mesh(new T3.BoxGeometry(0.38, 0.62, 0.04), r3Mat(0x1a130d)); door.position.set(1.05, 1.42, 1.02); S3.add(door);
+  // one hanging lantern per crew member (dimmer once they have carried you twice), scar patches on the roof,
+  // pinned papers for fragments read, tally notches for arrivals: pooled, shown by count each frame
+  const crewL = [], scars = [], frags = [], tally = [];
+  for (let k = 0; k < 8; k++) { const l = new T3.Mesh(new T3.SphereGeometry(0.08, 8, 6), r3Mat(0xffd18a, { emissive: 0xffd18a, emissiveIntensity: 0.8 })); l.position.set(-1.75 + k * 0.5, 1.0, 1.08); S3.add(l); crewL.push(l); }
+  for (let k = 0; k < 6; k++) { const p = new T3.Mesh(new T3.BoxGeometry(0.3, 0.04, 0.24), r3Mat(k % 2 ? 0x6b5a3a : 0x5a4a5a)); p.position.set(-1.2 + k * 0.45, 2.5 + Math.abs(k - 2.5) * -0.05, 0.4); p.rotation.x = -0.35; S3.add(p); scars.push(p); }
+  for (let k = 0; k < 8; k++) { const f = new T3.Mesh(new T3.BoxGeometry(0.14, 0.18, 0.02), r3Mat(0xd9cfb4, { emissive: 0xffd9a0, emissiveIntensity: 0 })); f.position.set(-1.55 + k * 0.16, 1.25 + (k % 2) * 0.06, 1.03); f.rotation.z = (k % 3 - 1) * 0.2; S3.add(f); frags.push(f); }
+  for (let k = 0; k < 10; k++) { const n = new T3.Mesh(new T3.BoxGeometry(0.04, 0.16, 0.03), brass); n.position.set(0.7 + k * 0.08, 1.22, 1.03); S3.add(n); tally.push(n); }
+  scene.add(S3);
+  R3.E.sanct = { g: S3, legs, wins, winMat, crewL, scars, frags, tally };
+}
+function r3UpdateEntities() {
+  const P = G.p, E = R3.E, t = S.motion ? G.t : 0;
+  // Warden: hidden while falling (as in 2D), blinking while hurt, leaning into its movement
+  const sp = Math.hypot(P.vx, P.vy);
+  E.warden.visible = !(G.fallT > 0 && G.fallT < 1.0) && !(P.hurtT > 1.5 && Math.floor(P.hurtT * 12) % 2 === 0);
+  E.warden.position.set(P.x / T, S.motion ? Math.abs(Math.sin(P.walk * 0.18)) * 0.03 : 0, P.y / T);
+  E.warden.rotation.y = -P.aim;   // local +x faces the lantern's aim
+  const mv = Math.atan2(P.vy, P.vx), lean = Math.min(0.16, sp / 150 * 0.16) * (S.motion ? 1 : 0.5), rel = mv + P.aim;
+  E.wardenBody.rotation.set(Math.sin(rel) * lean, 0, -Math.cos(rel) * lean);
+  E.lamp.position.x = P.focus ? 0.62 : 0.52;
+  E.glass.material.color.setHex(P.focus ? 0xfff3d6 : 0xffc46b);
+  // cone: the simulation's lantern reach and half-angle
+  const lit = G.fallT <= 0, m = lanternMul(), reach = (P.focus ? 390 : 270) * m / T, half = P.focus ? 0.2 : 0.62;
+  E.cone.visible = lit && E.warden.visible;
+  E.cone.position.set(P.x / T + Math.cos(P.aim) * 0.5, 0.8, P.y / T + Math.sin(P.aim) * 0.5);
+  E.cone.rotation.set(0, -P.aim, -0.06);
+  E.cone.scale.set(reach, Math.tan(half) * reach, Math.tan(half) * reach);
+  E.coneMat.opacity = P.focus ? 0.1 : 0.07;
+  // Hollows
+  const seen = new Set();
+  for (const h of G.hollows) {
+    seen.add(h);
+    let o = E.hollows.get(h); if (!o) { o = r3Hollow(h); E.hollows.set(h, o); }
+    o.g.position.set(h.x / T, 0, h.y / T); o.g.rotation.y = -(h.ang || 0);
+    const body = h.emerge <= 0 && h.vis;
+    o.bodyG.visible = body;
+    if (body) {
+      const ph = t + h.seed, moving = !h.frozen && h.spd > 5;
+      o.shell.scale.set(1 + 0.06 * Math.sin(ph * (moving ? 3 : 0.3)), 1.3 + 0.05 * Math.sin(ph * 2.1), 1 + 0.06 * Math.cos(ph * (moving ? 3 : 0.3)));
+      o.rimMat.color.setHex(h.burn > 0 ? 0xff9646 : h.frozen ? 0xdcecf0 : 0x7896a0);
+      o.rimMat.opacity = h.burn > 0 ? 0.4 + h.burn * 0.5 : h.frozen ? 0.7 : 0.4;
+    }
+    // eyes: with the body when lit; alone in the dark only with a clear line within 260 px (drawEyes)
+    let ea = 0;
+    if (h.emerge <= 0) {
+      if (h.vis) ea = 1;
+      else { const d = Math.hypot(h.x - P.x, h.y - P.y); if (d < 260 && losFromPlayer(h.x, h.y)) ea = (1 - d / 260) * 0.85; }
+    }
+    o.eyes.visible = ea > 0; o.eyeMat.opacity = ea; o.eyeA = ea; o.body = body;
+  }
+  for (const [h, o] of E.hollows) if (!seen.has(h)) { R3.scene.remove(o.g); E.hollows.delete(h); }
+  // survivors and mimics (only while lit), escorts (always, under the mask)
+  const figSeen = new Set();
+  const place = (o, f, escort) => {
+    figSeen.add(f);
+    let r = E.figs.get(f); if (!r) { r = r3Figure(escort); E.figs.set(f, r); }
+    const j = escort && f.shakeT > 0 ? vrand(-1.5, 1.5) / T : 0;
+    r.g.position.set(f.x / T + j, 0, f.y / T);
+    r.g.rotation.y = -Math.atan2(P.y - f.y, P.x - f.x);
+    const br = escort ? 0.5 + 0.5 * Math.sin((f.walk || 0) * 0.25) : 0.5 + 0.5 * Math.cos(sigPhase(f) * TAU);
+    r.upper.position.y = br * 0.04; r.upper.scale.y = 1 + br * 0.04;
+    r.ring.visible = !!(escort && f.shaken);
+    r.g.visible = escort || !!f.vis;
+  };
+  for (const s of G.signals) place(null, s, false);
+  for (const e of G.escorts) place(null, e, true);
+  for (const [f, r] of E.figs) if (!figSeen.has(f)) { R3.scene.remove(r.g); E.figs.delete(f); }
+  // loot (only while lit)
+  const itSeen = new Set();
+  for (const it of G.items) {
+    itSeen.add(it);
+    let r = E.items.get(it); if (!r) { r = r3Item(it); E.items.set(it, r); }
+    r.g.position.set(it.x / T, 0, it.y / T);
+    r.g.visible = !!it.vis;
+    if (it.kind === 'ember') { const k = 0.4 + 0.6 * Math.sqrt(it.amt / Math.max(1, it.max)); r.g.scale.setScalar(k); }
+  }
+  for (const [it, r] of E.items) if (!itSeen.has(it)) { R3.scene.remove(r.g); E.items.delete(it); }
+  // the Sanctuary: legs shift weight, windows breathe with the heartbeat, its record shown by count
+  const sc = E.sanct, crew = CH.crew, scarN = crew.reduce((a, c) => a + c.scars, 0);
+  sc.g.position.set(G.sanct.x / T, 0, G.sanct.y / T);
+  sc.legs.forEach((l, i) => { l.position.y = 0.75 + Math.sin(t * 1.1 + i * 1.7) * 0.04; });
+  sc.winMat.emissiveIntensity = 0.7 + 0.3 * Math.max(0, 1 - (G.t % 1) * 3.5);
+  sc.crewL.forEach((l, k) => { l.visible = k < crew.length; if (l.visible) { l.material.emissiveIntensity = crew[k].scars >= 2 ? 0.25 : 0.8; l.position.x = -1.75 + k * 0.5 + Math.sin(t * 1.4 + k) * 0.04; } });
+  sc.scars.forEach((p, k) => { p.visible = k < Math.min(scarN, 6); });
+  sc.frags.forEach((f, k) => { f.visible = k < Math.min(CH.fragments.length, 8); f.material.emissiveIntensity = f.visible ? 0.35 : 0; });
+  sc.tally.forEach((n, k) => { n.visible = k < Math.min(CH.arrivals, 10); });
+}
+/* Mouse aim in 3D: the cursor's ray through the perspective camera, meeting the floor (y = 0). Returns sim px. */
+function r3ScreenToWorld(sx, sy) {
+  const T3 = R3.T, v = new T3.Vector3(sx / window.innerWidth * 2 - 1, -(sy / window.innerHeight * 2 - 1), 0.5).unproject(R3.camera);
+  const o = R3.camera.position, d = v.sub(o).normalize();
+  if (Math.abs(d.y) < 1e-6) return null;
+  const k = -o.y / d.y; if (k < 0) return null;
+  return { x: (o.x + d.x * k) * T, y: (o.z + d.z * k) * T };
+}
+function r3Entities() {   // tests: what the 3D layer is showing for each entity
+  const E = R3.E; if (!E) return null;
+  return {
+    warden: { x: E.warden.position.x * T, y: E.warden.position.z * T, visible: E.warden.visible, aim: -E.warden.rotation.y },
+    hollows: G.hollows.map(h => { const o = E.hollows.get(h); return o ? { x: h.x, y: h.y, simVis: !!h.vis, body: o.bodyG.visible, eyes: o.eyes.visible, eyeA: o.eyeA } : null; }),
+    figs: G.signals.concat(G.escorts).map(f => { const r = E.figs.get(f); return r ? { x: f.x, y: f.y, simVis: !!f.vis, shown: r.g.visible } : null; }),
+    items: G.items.map(it => { const r = E.items.get(it); return r ? { kind: it.kind, x: it.x, y: it.y, simVis: !!it.vis, shown: r.g.visible } : null; })
+  };
 }
 
 /* ===================== input ===================== */
@@ -3587,7 +3805,7 @@ if (DEBUG) {
     get r3() { return R3.status; }, get r3Error() { return R3.error; },
     r3Doors() { return R3.doors ? R3.doors.map((d, k) => ({ k, shown: d.shown, label: d.label, slab: d.slab.visible, glow: d.glowMat.uniforms.uA.value, brackets: d.brackets.visible })) : null; },
     r3Project(x, y, h) { return r3Project(x, y, h); },
-    r3Read(points) { return r3Read(points); }, r3FloorVisible(x, y) { return r3FloorVisible(x, y); }, r3MaskAt(x, y) { const M = R3.mask; if (!M) return null; const d = M.g.getImageData(Math.floor(x / T * M.px), Math.floor(y / T * M.px), 1, 1).data; return d[0] / 255; }
+    r3Read(points) { return r3Read(points); }, r3Entities() { return r3Entities(); }, r3ScreenToWorld(x, y) { return r3ScreenToWorld(x, y); }, r3FloorVisible(x, y) { return r3FloorVisible(x, y); }, r3MaskAt(x, y) { const M = R3.mask; if (!M) return null; const d = M.g.getImageData(Math.floor(x / T * M.px), Math.floor(y / T * M.px), 1, 1).data; return d[0] / 255; }
   };
 }
 applyPresentation();
