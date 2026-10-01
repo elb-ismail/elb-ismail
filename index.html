@@ -2923,12 +2923,14 @@ function r3BuildZone() {
     strapA.position.set(-0.55, 0, 0); strapB.position.set(0.55, 0, 0); slab.add(strapA, strapB);
     const glowMat = glowMaterial(T), glow = new T.Mesh(new T.PlaneGeometry(2, 1.6), glowMat); glow.rotation.x = -Math.PI / 2; glow.position.y = 0.02;
     const brackets = new T.Group();
-    for (const s of [-1, 1]) { const b = new T.Mesh(new T.BoxGeometry(0.1, 0.5, 0.5), brass); b.position.set(s * 1.08, 1.2, 0.55); const b2 = b.clone(); b2.position.z = -0.55; brackets.add(b, b2); }
+    // drawn over the dark like the 2D chart marks: visible only while lit or during the pin flash (see r3UpdateDoors)
+    const bracketMat = new T.MeshBasicMaterial({ color: 0xd6bc78, transparent: true, opacity: 0.55 });
+    for (const s of [-1, 1]) { const b = new T.Mesh(new T.BoxGeometry(0.1, 0.5, 0.5), bracketMat); b.position.set(s * 1.08, 1.2, 0.55); const b2 = b.clone(); b2.position.z = -0.55; brackets.add(b, b2); }
     const dustGeo = new T.BufferGeometry(), dp = new Float32Array(16 * 3); dustGeo.setAttribute('position', new T.BufferAttribute(dp, 3));
     const dust = new T.Points(dustGeo, new T.PointsMaterial({ color: col(B.mineral), size: 0.09, transparent: true, depthWrite: false }));
     grp.add(lintel, arch, slab, glow, brackets, dust);
     scene.add(grp);
-    return { grp, slab, slabMat, glow, glowMat, brackets, dust, dustAt: -99, shown: null, label: null };
+    return { grp, slab, slabMat, glow, glowMat, brackets, bracketMat, dust, dustAt: -99, shown: null, label: null };
   });
   R3.scene = scene; R3.zone = G; R3.floorTex = tex;
   R3.target = new T.Vector3(); R3.room = -1;
@@ -2955,7 +2957,12 @@ function r3UpdateDoors() {
     if (st.shown === 'unknown') u.uA.value = 0;
     else if (!st.lit) { u.uCol.value.setHex(DOOR_COL.memory); u.uA.value = 0.14; u.uFlick.value = 0.35 * flick; }
     else { u.uCol.value.setHex(st.shown === 'open' ? DOOR_COL.open : DOOR_COL.closed); u.uA.value = st.shown === 'open' ? 0.3 : 0.38; u.uFlick.value = 0; }
-    d.brackets.visible = st.label === 'pinned';
+    // 2D parity (drawBeaconPins): brackets on a pinned, non-dock doorway while it is lit (0.1 s) or for 1.2 s after a
+    // beacon is placed, even where the beacon pins but does not light. Brackets only, never the doorway's state.
+    const flash = G.pinFlash && t - G.pinFlash.t < 1.2 ? 1 - (t - G.pinFlash.t) / 1.2 : 0;
+    const pinned = !(e.a === G.Z.dockR || e.b === G.Z.dockR) && G.beacons.some(b => b.lit) && doorPinned(k);
+    d.brackets.visible = pinned && (t - G.doorSeenT[k] < 0.1 || flash > 0);
+    d.bracketMat.opacity = 0.55 + 0.45 * flash;
     // settling: a short burst of grit the first time a fresh change is lit
     if (st.lit && t - (e.changedAt ?? -99) < 25 && d.dustAt < (e.changedAt ?? -99) && S.motion) d.dustAt = t;
     const age = t - d.dustAt; d.dust.visible = age >= 0 && age < 1.6 && st.lit;

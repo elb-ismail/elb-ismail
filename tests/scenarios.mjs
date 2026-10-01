@@ -31,7 +31,8 @@ async function page(opts = {}) {
   const ctx = await browser.newContext({ viewport: opts.viewport || { width: 1280, height: 780 }, hasTouch: !!opts.touch, isMobile: !!opts.touch, reducedMotion: opts.reducedMotion || 'no-preference' });
   await routeThree(ctx, root);
   const pg = await ctx.newPage();
-  pg.errors = [];
+  pg.errors = []; pg.warnings = [];
+  pg.on('console', m => { if (m.type() === 'warning') pg.warnings.push(m.text()); });
   pg.on('pageerror', e => pg.errors.push('pageerror: ' + e.message));
   pg.on('console', m => { if (m.type() === 'error' && !/ERR_CERT|fonts\.g/.test(m.text())) pg.errors.push('console: ' + m.text()); });
   if (opts.storage) await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { for (const [k, v] of Object.entries(s)) localStorage.setItem(k, v); sessionStorage.setItem('seeded', '1'); } }, opts.storage);
@@ -310,6 +311,8 @@ await scenario('3d step 1: Three.js loads on demand, WebGL2 draws the room under
   assert(r.order, 'the 2D HUD canvas sits above the 3D world canvas');
   assert(/rgba\(0, 0, 0, 0\)|transparent/.test(r.bg2d), '2D layer is transparent over the world: ' + r.bg2d);
   await pg.shot('3D-step1-graybox');
+  const three = pg.warnings.filter(w => /THREE\./.test(w));
+  assert(three.length === 0, 'no Three.js warnings (e.g. the removed PCFSoftShadowMap): ' + three.join(' | '));
 }, { query: '&r3d=1', seed: 11 });
 
 await scenario('3d step 2: doorways show the truth only while lit; otherwise the Warden\'s memory, or nothing', async pg => {
@@ -396,6 +399,33 @@ await scenario('3d step 3: unlit floor renders black in WebGL; lit floor does no
   assert(b.length > 0, 'some pinned doorways are within the beacon light');
   for (const d of b) assert(d.pinned && d.seenAgo < 0.05 && d.mask > 0.2 && (d.label === 'pinned' || d.label === 'settling'), 'pinned doorway inside beacon light is lit, seen and shown as held: ' + JSON.stringify(d));
   await pg.shot('3D-step3-light');
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('3d brackets: a pinned but unlit doorway shows brackets only during the pin flash, and never its state', async pg => {
+  await pg.waitForFunction(() => MS.r3 === 'ready' || MS.r3 === 'failed', null, { timeout: 15000 });
+  await beginFirstPlace(pg);
+  const k = await pg.evaluate(() => {
+    // 40 px west of the centre of the room east of the dock, facing west: the room's east doorway is pinned (same room)
+    // but about 184 px from the beacon, beyond its 150 px light, and behind the lantern
+    const G = MS.G, Z = G.Z, east = Z.dockR + 1;
+    MS.teleport(((east % Z.RW) * 9 + 5) * 32 - 40, (Math.floor(east / Z.RW) * 9 + 5) * 32);
+    G.hollows.forEach(h => h.dead = true); G.debugAim = Math.PI; MS.update(0.016);
+    return Z.edges.findIndex(e => e.v && e.a === east);
+  });
+  await pg.keyboard.press('b');
+  const r = await pg.evaluate(k => {
+    const G = MS.G, Z = G.Z, e = Z.edges[k], b = G.beacons[G.beacons.length - 1];
+    const c = { x: (e.i + 1) * 288 + 16, y: (e.j * 9 + 5) * 32 };
+    MS.update(0.05); MS.r3Read([]);
+    const during = { ...MS.r3Doors()[k], pinned: MS.doorPinned(k), dist: Math.round(Math.hypot(c.x - b.x, c.y - b.y)), seenAgo: G.t - G.doorSeenT[k] };
+    for (let i = 0; i < 30; i++) MS.update(0.05);
+    MS.r3Read([]);
+    const after = { ...MS.r3Doors()[k], seenAgo: G.t - G.doorSeenT[k] };
+    return { during, after };
+  }, k);
+  assert(r.during.pinned && r.during.dist > 150 && r.during.seenAgo > 0.1, 'setup: pinned, beyond the beacon light, unlit: ' + JSON.stringify(r.during));
+  assert(r.during.brackets && (r.during.label === 'unlit' || r.during.label === 'unknown'), 'brackets show during the pin flash while the doorway shows only memory: ' + JSON.stringify(r.during));
+  assert(!r.after.brackets && r.after.seenAgo > 0.1, 'after the flash, the unlit pinned doorway shows no brackets: ' + JSON.stringify(r.after));
 }, { query: '&r3d=1', seed: 11 });
 
 /* ---------- Milestone C: audio, captions, accessibility, persistence ---------- */
