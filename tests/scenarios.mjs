@@ -31,13 +31,24 @@ async function page(opts = {}) {
   const ctx = await browser.newContext({ viewport: opts.viewport || { width: 1280, height: 780 }, hasTouch: !!opts.touch, isMobile: !!opts.touch, reducedMotion: opts.reducedMotion || 'no-preference' });
   await routeThree(ctx, root);
   const pg = await ctx.newPage();
+  if (process.env.THROTTLE) {   // e.g. THROTTLE=4: run every page with the CPU slowed down 4x (Chrome DevTools throttling)
+    const cdp = await ctx.newCDPSession(pg);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.THROTTLE) });
+  }
   pg.errors = []; pg.warnings = [];
   pg.on('console', m => { if (m.type() === 'warning') pg.warnings.push(m.text()); });
   pg.on('pageerror', e => pg.errors.push('pageerror: ' + e.message));
   pg.on('console', m => { if (m.type() === 'error' && !/ERR_CERT|fonts\.g/.test(m.text())) pg.errors.push('console: ' + m.text()); });
-  if (opts.storage) await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { for (const [k, v] of Object.entries(s)) localStorage.setItem(k, v); sessionStorage.setItem('seeded', '1'); } }, opts.storage);
   await pg.goto(URL_BASE + '?debug=1' + (opts.query || '') + (opts.hash || ''));
   await pg.waitForFunction(() => window.MS && MS.state === 'title');
+  if (opts.storage) {
+    // Seed through the page, then reload. (An addInitScript seeder runs so early on file:// pages that localStorage can
+    // read as empty: in 5 of 25 traced runs it wrote the fixture back over a correct save after the test's reload.
+    // Writing from the page and reloading persisted in 25 of 25 runs.)
+    await pg.evaluate(s => { for (const [k, v] of Object.entries(s)) localStorage.setItem(k, v); }, opts.storage);
+    await pg.reload();
+    await pg.waitForFunction(() => window.MS && MS.state === 'title');
+  }
   if (opts.seed != null) await pg.evaluate(n => MS.seed(n), opts.seed);
   pg.shot = name => pg.screenshot({ path: path.join(OUT, name + '.png') });
   return pg;
@@ -47,6 +58,12 @@ async function beginFirstPlace(pg) {
   await pg.click('.rnode.avail');
   await pg.click('#goBtn');
   await pg.waitForFunction(() => MS.state === 'zone');
+}
+// Wait for game time, not wall time: when frames are slow (CPU throttling, loaded CI) the game runs slower than the
+// clock (each frame's step is capped), so a fixed wall-clock wait can end before the game has done the thing.
+async function gameWait(pg, secs) {
+  const t0 = await pg.evaluate(() => MS.G.t);
+  await pg.waitForFunction(([t0, s]) => MS.G && MS.G.t >= t0 + s, [t0, secs], { timeout: 20000 });
 }
 const ev = (pg, type) => pg.evaluate(t => MS.events.filter(e => e.type === t).length, type);
 async function toDock(pg) {
@@ -192,7 +209,7 @@ await scenario('order: ignore the voice and walk into the mimic untested; reveal
     MS.teleport(m.x + 20, m.y); G.debugAim = 0;   // face away: no light on it long enough to read its pulse
     return true;
   });
-  await pg.keyboard.down('e'); await pg.waitForTimeout(1300); await pg.keyboard.up('e');
+  await pg.keyboard.down('e'); await gameWait(pg, 1.3); await pg.keyboard.up('e');
   const cue = await pg.evaluate(() => MS.CH.exp.stats.mimicCues[0]);
   assert(cue && cue.how === 'touch', 'mimic revealed by touch');
   assert(cue.cues.rhythm === false && cue.cues.drift === false, 'no clue recorded that was not observed: ' + JSON.stringify(cue.cues));
@@ -214,7 +231,7 @@ await scenario('order: flare the voice first, before any lens; mimic exposed, gu
   await pg.mouse.move(pos[0], pos[1]);
   await pg.waitForTimeout(80);
   await pg.keyboard.press('f');
-  await pg.waitForTimeout(900);
+  await gameWait(pg, 0.9);
   const r = await pg.evaluate(() => ({ exposed: MS.CH.exp.stats.mimicsExposed, res: MS.CH.exp.stats.flareResults, flares: MS.G.p.flares }));
   assert(r.exposed === 1, 'flare exposed the mimic');
   assert(r.res && r.res[0] === 'exposed a mimic', 'flare result recorded: ' + JSON.stringify(r.res));
