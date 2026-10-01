@@ -2765,6 +2765,7 @@ function r3Start() {
     R3.renderer = new T.WebGLRenderer({ canvas, context: gl, antialias: true });
     R3.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     R3.renderer.outputColorSpace = T.SRGBColorSpace;
+    R3.renderer.shadowMap.enabled = true; R3.renderer.shadowMap.type = T.PCFShadowMap;   // PCFSoftShadowMap was removed in this Three.js release
     R3.camera = new T.PerspectiveCamera(CAM3.fov, 1, 0.5, 300);
     r3Resize();
     R3.status = 'ready';
@@ -2799,21 +2800,105 @@ function glowMaterial(T) {   // the threshold strip: colour and strength set per
     transparent: true, depthWrite: false, blending: T.AdditiveBlending
   });
 }
+/* ----- Step 3: light. The mask is the simulation's own light polygons (G.lights), rasterised each frame into a
+   world-space texture; every world material multiplies its colour by it. Unlit means exactly what the simulation
+   means by unlit. Three.js lights only shade what the mask lets through. ----- */
+const MASK_PX = 8;   // mask texels per tile; QUALITY.maskScale halves it when frames run long
+function r3MaskInit() {
+  const T = R3.T, Z = G.Z, px = Math.max(2, Math.round(MASK_PX * QUALITY.maskScale));
+  const c = document.createElement('canvas'); c.width = Z.GW * px; c.height = Z.GH * px;
+  R3.mask = { c, g: c.getContext('2d'), px, scale: QUALITY.maskScale };
+  const tex = new T.CanvasTexture(c); tex.colorSpace = T.NoColorSpace; tex.flipY = false;   // canvas rows run north to south, like world z
+  tex.minFilter = T.LinearFilter; tex.magFilter = T.LinearFilter; tex.generateMipmaps = false;
+  if (!R3.maskU) R3.maskU = { uMask: { value: tex }, uMaskSize: { value: new T.Vector2(Z.GW, Z.GH) }, uMaskBase: { value: 0.03 } };
+  else { R3.maskU.uMask.value.dispose(); R3.maskU.uMask.value = tex; R3.maskU.uMaskSize.value.set(Z.GW, Z.GH); }
+}
+function r3MaskDraw() {
+  const M = R3.mask, g = M.g, k = M.px / T;   // sim px -> mask px
+  // unlit stone: the same faint floor as the 2D renderer (about 3 %, more with Darkness readability, none in blackout)
+  const base = S.readable ? 0.1 : G.blackout ? 0.01 : 0.032 - 0.018 * G.dim;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalCompositeOperation = 'source-over';
+  R3.maskU.uMaskBase.value = Math.round(255 * base) / 255;   // the shader applies light gain only above this floor
+  const b = Math.round(255 * base); g.fillStyle = `rgb(${b},${b},${b})`; g.fillRect(0, 0, M.c.width, M.c.height);
+  g.globalCompositeOperation = 'lighter';
+  const fl = S.flicker && S.motion ? (G.flicker > 0 ? 0.74 + RNG.visual() * 0.26 : 0.96 + 0.04 * Math.sin(G.t * 23) * Math.sin(G.t * 7)) : 1;
+  const low = S.flicker && G.p.warmth / G.p.maxW < 0.3 ? 0.84 + 0.16 * Math.sin(G.t * 9) : 1;
+  for (const L of G.lights) {
+    if (!L.poly) continue;
+    const lamp = L.kind === 'cone' || L.kind === 'focus' || L.kind === 'glow';
+    g.save(); g.setTransform(k, 0, 0, k, 0, 0);
+    polyPath(L.poly, g); g.clip();
+    g.globalAlpha = clamp(L.alpha * (lamp ? fl * low : 1), 0, 1);
+    g.drawImage(R3.maskSprites[L.kind] || R3.maskSprites.cone, L.x - L.r, L.y - L.r, L.r * 2, L.r * 2);
+    g.restore();
+  }
+  R3.maskU.uMask.value.needsUpdate = true;
+}
+/* Patch a built-in material so its final colour is multiplied by the light mask at its world position. */
+function maskify(mat) {
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uMask = R3.maskU.uMask; sh.uniforms.uMaskSize = R3.maskU.uMaskSize;
+    sh.vertexShader = 'varying vec2 vMaskXZ;\n' + sh.vertexShader.replace('#include <project_vertex>',
+      '#include <project_vertex>\n vec4 mwp = vec4(transformed, 1.0);\n #ifdef USE_INSTANCING\n mwp = instanceMatrix * mwp;\n #endif\n vMaskXZ = (modelMatrix * mwp).xz;');
+    sh.uniforms.uMaskBase = R3.maskU.uMaskBase;
+    sh.fragmentShader = 'uniform sampler2D uMask; uniform vec2 uMaskSize; uniform float uMaskBase; varying vec2 vMaskXZ;\n' + sh.fragmentShader.replace('#include <opaque_fragment>',
+      '#include <opaque_fragment>\n vec3 lm = texture2D(uMask, vMaskXZ / uMaskSize).rgb;\n vec3 gl2 = max(lm - vec3(uMaskBase), 0.0);\n gl_FragColor.rgb = gl_FragColor.rgb * gl2 * 3.2 + gl2 * gl2 * 0.14 + diffuseColor.rgb * uMaskBase;');   // unlit: bare albedo at the base level, untouched by any light
+  };
+  mat.customProgramCacheKey = () => 'mask1';
+  return mat;
+}
+/* A fixed pool of Three.js lights (a constant count keeps shader programs stable): the lantern, the four nearest
+   beacons, a ring of three for the Sanctuary, and one for flares. */
+function r3Lights(scene) {
+  const T = R3.T;
+  scene.add(new T.HemisphereLight(0x2a3a5a, 0x05070c, 0.02 * Math.PI * 4));   // near-total darkness: a faint blue-black base
+  const lantern = new T.SpotLight(0xffc98a, 0, 12, 0.6, 0.55, 1.2);
+  lantern.castShadow = true; lantern.shadow.mapSize.set(512, 512); lantern.shadow.bias = -0.002;
+  scene.add(lantern, lantern.target);
+  const beacons = Array.from({ length: 4 }, () => { const l = new T.PointLight(0xcfe0ff, 0, 6.5, 1.3); scene.add(l); return l; });
+  const sanct = Array.from({ length: 3 }, () => { const l = new T.PointLight(0xffbe70, 0, 9, 1.2); scene.add(l); return l; });
+  const flare = new T.PointLight(0xffa080, 0, 10, 1.1); scene.add(flare);
+  R3.L = { lantern, beacons, sanct, flare };
+}
+function r3UpdateLights() {
+  const P = G.p, L = R3.L, m = lanternMul(), lit = G.fallT <= 0;
+  // lantern: follows the simulation's cone (half-angle 0.62 rad, 0.2 focused) and reach
+  L.lantern.position.set(P.x / T, 1.3, P.y / T);
+  L.lantern.target.position.set(P.x / T + Math.cos(P.aim) * 4, 0, P.y / T + Math.sin(P.aim) * 4);
+  L.lantern.angle = P.focus ? 0.2 : 0.62;
+  L.lantern.distance = (P.focus ? 390 : 270) * m / T * 1.15;
+  L.lantern.intensity = lit ? (P.focus ? 70 : 38) : 0;
+  const near = G.beacons.filter(b => b.lit).sort((a, b) => Math.hypot(a.x - P.x, a.y - P.y) - Math.hypot(b.x - P.x, b.y - P.y));
+  L.beacons.forEach((l, i) => { const b = near[i]; l.intensity = b ? 14 : 0; if (b) l.position.set(b.x / T, 1.6, b.y / T); });
+  L.sanct.forEach((l, i) => { const a = i / 3 * TAU + 0.5; l.position.set(G.sanct.x / T + Math.cos(a) * 1.6, 2.2, G.sanct.y / T + Math.sin(a) * 1.6); l.intensity = 16; });
+  const f = G.flares.find(f => f.burst && f.life > 0);
+  L.flare.intensity = f ? 40 * clamp(f.life / f.max, 0, 1) : 0; if (f) L.flare.position.set(f.x / T, 1.5, f.y / T);
+}
 function r3BuildZone() {
   const T = R3.T, Z = G.Z, B = BIOMES[Z.z.biome] || BIOMES[0];
   const scene = new T.Scene();
   scene.background = new T.Color(0x020409);
-  scene.add(new T.HemisphereLight(0x9fb1c4, 0x10141c, 1.25));
-  const sun = new T.DirectionalLight(0xc8d4e0, 1.0); sun.position.set(-20, 40, 30); scene.add(sun);
+  r3MaskInit();
+  if (!R3.maskSprites) {   // the 2D renderer's falloff, tinted per light like its colour overlays
+    const st = [[0, 1], [0.45, 0.86], [0.78, 0.4], [1, 0]];
+    R3.maskSprites = { cone: radialSprite(255, 226, 188, st), focus: radialSprite(255, 236, 205, st), glow: radialSprite(255, 226, 188, st),
+      sanct: radialSprite(255, 206, 150, st), beacon: radialSprite(205, 225, 255, st), flare: radialSprite(255, 172, 132, st) };
+  }
+  r3Lights(scene);
+  // fill inside the mask so lit stone reads like the 2D renderer's lit areas; the mask decides where
+  scene.add(new T.AmbientLight(0xa0a8b4, 1.0));
   const col = (c, k = 1) => new T.Color(`rgb(${Math.round(c[0] * k)},${Math.round(c[1] * k)},${Math.round(c[2] * k)})`);
   // floor: the place's painted flagstones, the same canvas the 2D renderer uses
   const tex = new T.CanvasTexture(G.floor); tex.colorSpace = T.SRGBColorSpace; tex.anisotropy = 4;
-  const floor = new T.Mesh(new T.PlaneGeometry(Z.GW, Z.GH), new T.MeshLambertMaterial({ map: tex }));
+  const floor = new T.Mesh(new T.PlaneGeometry(Z.GW, Z.GH), maskify(new T.MeshLambertMaterial({ map: tex })));
+  floor.receiveShadow = true;
   floor.rotation.x = -Math.PI / 2; floor.position.set(Z.GW / 2, 0, Z.GH / 2); scene.add(floor);
   // walls: one instanced box per wall tile (doorway tiles excluded), tone varied by a tile hash
   const tiles = [];
   for (let y = 0; y < Z.GH; y++) for (let x = 0; x < Z.GW; x++) { const k = x + y * Z.GW; if (Z.wall[k] && Z.doorTile[k] < 0) tiles.push([x, y]); }
-  const walls = new T.InstancedMesh(new T.BoxGeometry(1, 1, 1), new T.MeshLambertMaterial({ color: 0xffffff }), tiles.length);
+  const walls = new T.InstancedMesh(new T.BoxGeometry(1, 1, 1), maskify(new T.MeshLambertMaterial({ color: 0xffffff })), tiles.length);
+  walls.castShadow = true; walls.receiveShadow = true;
   const m = new T.Matrix4(), q = new T.Quaternion(), sc = new T.Vector3(), ps = new T.Vector3();
   tiles.forEach(([x, y], n) => {
     const edge = x % ROOM === 0 || y % ROOM === 0, h = edge ? WALL_H : PILLAR_H, nudge = tileHash(x, y) < 0.12 ? (tileHash(y, x) < 0.5 ? -0.06 : 0.06) : 0;
@@ -2822,16 +2907,18 @@ function r3BuildZone() {
   });
   scene.add(walls);
   // doorways
-  const stone = new T.MeshLambertMaterial({ color: col(B.wall, 0.75) }), iron = new T.MeshLambertMaterial({ color: col(B.metal, 0.7) }), brass = new T.MeshLambertMaterial({ color: 0xd6bc78 });
-  const archMat = new T.MeshLambertMaterial({ color: col(B.cap, 0.9) });
+  const stone = maskify(new T.MeshLambertMaterial({ color: col(B.wall, 0.75) })), iron = maskify(new T.MeshLambertMaterial({ color: col(B.metal, 0.7) })), brass = maskify(new T.MeshLambertMaterial({ color: 0xd6bc78 }));
+  const archMat = maskify(new T.MeshLambertMaterial({ color: col(B.cap, 0.9) }));
+  // memory: what the Warden remembers of an unlit doorway is drawn over the dark like the 2D chart, never masked
+  const memMat = new T.MeshBasicMaterial({ color: DOOR_COL.memory, transparent: true, opacity: 0.16, depthWrite: false });
   R3.doors = Z.edges.map((e, k) => {
     const g = doorGeom(k), grp = new T.Group(); grp.position.set(g.cx, 0, g.cz); if (g.v) grp.rotation.y = Math.PI / 2;
     // local frame: the opening runs along x (width 2), the wall thickness along z
     const lintel = new T.Mesh(new T.BoxGeometry(2, WALL_H - DOOR_H, 1), archMat); lintel.position.y = (WALL_H + DOOR_H) / 2;
     const arch = new T.Mesh(new T.TorusGeometry(0.95, 0.09, 6, 18, Math.PI), archMat); arch.position.y = DOOR_H - 0.95 + 0.02; arch.scale.y = 0.55; arch.position.y = DOOR_H - 0.55;
-    const slabMat = stone.clone(); slabMat.transparent = true;
-    slabMat.userData = { lit: stone.color.clone(), mem: new T.Color(DOOR_COL.memory) };   // fixed at build time
+    const slabMat = stone;
     const slab = new T.Mesh(new T.BoxGeometry(2, DOOR_H, 0.8), slabMat); slab.position.y = DOOR_H / 2;
+    slab.userData = { lit: stone, mem: memMat };
     const strapA = new T.Mesh(new T.BoxGeometry(0.12, DOOR_H * 0.9, 0.86), iron), strapB = strapA.clone();
     strapA.position.set(-0.55, 0, 0); strapB.position.set(0.55, 0, 0); slab.add(strapA, strapB);
     const glowMat = glowMaterial(T), glow = new T.Mesh(new T.PlaneGeometry(2, 1.6), glowMat); glow.rotation.x = -Math.PI / 2; glow.position.y = 0.02;
@@ -2861,8 +2948,8 @@ function r3UpdateDoors() {
     const st = r3DoorLabel(k), e = G.Z.edges[k];
     d.shown = st.shown; d.label = st.label;
     d.slab.visible = st.shown === 'closed';
-    d.slabMat.opacity = st.lit ? 1 : 0.42;
-    d.slabMat.color.copy(st.lit ? d.slabMat.userData.lit : d.slabMat.userData.mem);
+    d.slab.material = st.lit ? d.slab.userData.lit : d.slab.userData.mem;
+    for (const c of d.slab.children) c.visible = st.lit;   // iron straps only on the real, lit slab
     const u = d.glowMat.uniforms;
     u.uTime.value = t;
     if (st.shown === 'unknown') u.uA.value = 0;
@@ -2893,7 +2980,10 @@ function r3Project(x, y, h) {   // sim position (px) to CSS pixels, for tests an
 }
 function renderZone3d() {
   if (R3.zone !== G) r3BuildZone();
+  if (R3.mask.scale !== QUALITY.maskScale) r3MaskInit();   // the half-resolution fallback
   r3Camera();
+  r3MaskDraw();
+  r3UpdateLights();
   r3UpdateDoors();
   R3.renderer.render(R3.scene, R3.camera);
 }
@@ -2901,6 +2991,23 @@ function renderOverlay2d() {   // the 2D canvas becomes a transparent layer for 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, cv.width, cv.height);
   drawHud();
+}
+function r3Read(points) {   // tests: render this frame and return luminance (0-255) at CSS pixel points
+  renderZone3d();
+  const gl = R3.renderer.getContext(), c = R3.canvas, sx = c.width / window.innerWidth, sy = c.height / window.innerHeight, px = new Uint8Array(4 * 9);
+  return points.map(([x, y]) => {
+    const X = Math.round(x * sx) - 1, Y = c.height - Math.round(y * sy) - 2;
+    gl.readPixels(X, Y, 3, 3, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let s = 0; for (let i = 0; i < 36; i += 4) s += (px[i] + px[i + 1] + px[i + 2]) / 3;
+    return s / 9;
+  });
+}
+function r3FloorVisible(x, y) {   // tests: is this floor point the first thing the camera sees along its ray?
+  const T3 = R3.T, cam = R3.camera.position, p = new T3.Vector3(x / T, 0.001, y / T), dir = p.clone().sub(cam), d = dir.length();
+  const rc = new T3.Raycaster(cam.clone(), dir.normalize(), 0.1, d - 0.05);
+  const hits = rc.intersectObjects(R3.scene.children, true).filter(h => h.object.visible && !h.object.isPoints && h.object.material && h.object.material.blending !== T3.AdditiveBlending && h.object.material.depthWrite !== false && !(h.object.parent && !h.object.parent.visible));
+  return hits.length ? { visible: false, by: h0(hits[0]) } : { visible: true };
+  function h0(h) { return (h.object.isInstancedMesh ? 'wall' : h.object.geometry.type) + '@' + h.point.y.toFixed(2); }
 }
 
 /* ===================== input ===================== */
@@ -3469,10 +3576,11 @@ if (DEBUG) {
     teleport(x, y) { G.p.x = x; G.p.y = y; G.cam.x = x; G.cam.y = y; },
     guide() { return guideState(); },
     QUALITY, stall(ms) { debugStall = ms; }, get frameWorkMs() { return +workAvg.toFixed(2); },
-    rng: RNG,
+    rng: RNG, get R3() { return R3; },
     get r3() { return R3.status; }, get r3Error() { return R3.error; },
     r3Doors() { return R3.doors ? R3.doors.map((d, k) => ({ k, shown: d.shown, label: d.label, slab: d.slab.visible, glow: d.glowMat.uniforms.uA.value, brackets: d.brackets.visible })) : null; },
-    r3Project(x, y, h) { return r3Project(x, y, h); }
+    r3Project(x, y, h) { return r3Project(x, y, h); },
+    r3Read(points) { return r3Read(points); }, r3FloorVisible(x, y) { return r3FloorVisible(x, y); }, r3MaskAt(x, y) { const M = R3.mask; if (!M) return null; const d = M.g.getImageData(Math.floor(x / T * M.px), Math.floor(y / T * M.px), 1, 1).data; return d[0] / 255; }
   };
 }
 applyPresentation();

@@ -346,6 +346,58 @@ await scenario('3d step 2: doorways show the truth only while lit; otherwise the
   await pg.shot('3D-step2-doors');
 }, { query: '&r3d=1', seed: 11 });
 
+await scenario('3d step 3: unlit floor renders black in WebGL; lit floor does not; a beacon lights the doorways it pins', async pg => {
+  await pg.waitForFunction(() => MS.r3 === 'ready' || MS.r3 === 'failed', null, { timeout: 15000 });
+  await beginFirstPlace(pg);
+  await pg.waitForTimeout(600);
+  const r = await pg.evaluate(() => {
+    const G = MS.G, Z = G.Z, pts = [], info = [];
+    // the room east of the dock, lantern aimed north: its southern half is dark
+    const east = Z.dockR + 1; MS.teleport(((east % Z.RW) * 9 + 5) * 32, (Math.floor(east / Z.RW) * 9 + 5) * 32);
+    G.hollows.forEach(h => h.dead = true);
+    G.debugAim = -Math.PI / 2; MS.update(0.016); MS.update(0.016);
+    MS.r3Read([]);   // render once so the camera and light mask reflect this position before projecting
+    // floor tile centres around the Warden's room, on screen and clear of the HUD
+    for (let hy = 0; hy < Z.GH * 2; hy++) for (let hx = 0; hx < Z.GW * 2; hx++) {   // half-tile grid
+      const tx = hx >> 1, ty = hy >> 1;
+      if (Z.wall[tx + ty * Z.GW]) continue;
+      const x = (hx + 0.5) * 16, y = (hy + 0.5) * 16, p = MS.r3Project(x, y, 0);
+      if (p.behind || p.x < 300 || p.x > innerWidth - 300 || p.y < 150 || p.y > innerHeight - 120) continue;
+      if (!MS.r3FloorVisible(x, y).visible) continue;   // a wall or doorway stands in front of it from this camera
+      // classify by the light around the tile, not one texel: a sample on a cone's edge is neither lit nor unlit
+      const ms = []; for (const dx of [-19, 0, 19]) for (const dy of [-19, 0, 19]) ms.push(MS.r3MaskAt(x + dx, y + dy));
+      pts.push([p.x, p.y]); info.push({ m: Math.max(...ms), mMin: Math.min(...ms), tx, ty });
+    }
+    const lum = MS.r3Read(pts);
+    const unlitI = lum.map((l, i) => i).filter(i => info[i].m < 0.05), lit = lum.filter((l, i) => info[i].mMin > 0.5);
+    const worst = unlitI.sort((a, b) => lum[b] - lum[a])[0];
+    return { n: pts.length, unlitN: unlitI.length, unlitMax: worst == null ? 0 : lum[worst], worst: worst == null ? null : info[worst], litN: lit.length, litMin: Math.min(255, ...lit), litMed: lit.sort((a, b) => a - b)[Math.floor(lit.length / 2)] };
+  });
+  assert(r.unlitN > 10 && r.litN > 10, 'enough lit and unlit floor on screen: ' + JSON.stringify(r));
+  assert(r.unlitMax < 12, 'unlit floor is black in the WebGL output (max ' + r.unlitMax.toFixed(1) + ' at ' + JSON.stringify(r.worst) + ')');
+  assert(r.litMed > 3 * Math.max(4, r.unlitMax), 'lit floor is clearly visible (median ' + r.litMed.toFixed(1) + ')');
+  const b = await pg.evaluate(() => {
+    // a beacon 70 px inside a doorway of the room east of the dock; that doorway is pinned and inside the beacon's light
+    const G = MS.G, Z = G.Z, east = Z.dockR + 1;
+    const dc = e => e.v ? { x: (e.i + 1) * 288 + 16, y: (e.j * 9 + 5) * 32 } : { x: (e.i * 9 + 5) * 32, y: (e.j + 1) * 288 + 16 };
+    const ks = Z.edges.map((e, k) => k).filter(k => (Z.edges[k].a === east || Z.edges[k].b === east) && Z.edges[k].a !== Z.dockR && Z.edges[k].b !== Z.dockR);
+    const rc = { x: ((east % Z.RW) * 9 + 5) * 32, y: (Math.floor(east / Z.RW) * 9 + 5) * 32 };
+    MS.teleport(rc.x, rc.y); G.hollows.forEach(h => h.dead = true);
+    const out = [];
+    for (const k of ks) {
+      const c = dc(Z.edges[k]), d = Math.hypot(c.x - rc.x, c.y - rc.y), bx = c.x + (rc.x - c.x) / d * 70, by = c.y + (rc.y - c.y) / d * 70;
+      G.beacons = [{ x: bx, y: by, lit: true, c: 1, old: false, placedT: G.t }];
+      G.debugAim = Math.atan2(rc.y - c.y, rc.x - c.x);   // lantern faces away from the doorway: only the beacon lights it
+      G.doorSeenT[k] = -9; MS.update(0.016); MS.update(0.016); MS.r3Read([]);
+      out.push({ k, pinned: MS.doorPinned(k), seenAgo: +(G.t - G.doorSeenT[k]).toFixed(3), mask: MS.r3MaskAt(c.x + (bx - c.x) / 70 * 14, c.y + (by - c.y) / 70 * 14), label: MS.r3Doors()[k].label });
+    }
+    return out;
+  });
+  assert(b.length > 0, 'some pinned doorways are within the beacon light');
+  for (const d of b) assert(d.pinned && d.seenAgo < 0.05 && d.mask > 0.2 && (d.label === 'pinned' || d.label === 'settling'), 'pinned doorway inside beacon light is lit, seen and shown as held: ' + JSON.stringify(d));
+  await pg.shot('3D-step3-light');
+}, { query: '&r3d=1', seed: 11 });
+
 /* ---------- Milestone C: audio, captions, accessibility, persistence ---------- */
 await scenario('audio: nothing before a gesture; buses independent; mute; nodes released', async pg => {
   assert(await pg.evaluate(() => MS.audioStats()) === null, 'no AudioContext before the player interacts');
