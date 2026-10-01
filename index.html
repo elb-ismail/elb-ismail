@@ -2771,38 +2771,122 @@ function r3Resize() {
 }
 window.addEventListener('resize', r3Resize);
 
-/* Step 1 scaffold: a graybox of the room the Warden stands in, from the authored camera angle. */
-function r3Graybox(room) {
-  const T = R3.T, Z = G.Z, i = room % Z.RW, j = Math.floor(room / Z.RW);
-  const scene = new T.Scene();
-  scene.background = new T.Color(0x05070c);
-  scene.add(new T.HemisphereLight(0x9fb1c4, 0x10141c, 1.4));
-  const sun = new T.DirectionalLight(0xc8d4e0, 1.2); sun.position.set(-6, 14, 8); scene.add(sun);
-  const x0 = i * ROOM, z0 = j * ROOM, cx = x0 + ROOM / 2, cz = z0 + ROOM / 2, H = 3, th = 0.5;
-  const mat = c => new T.MeshLambertMaterial({ color: c });
-  const box = (w, h, d, x, y, z, m) => { const o = new T.Mesh(new T.BoxGeometry(w, h, d), m); o.position.set(x, y, z); scene.add(o); return o; };
-  const floor = new T.Mesh(new T.PlaneGeometry(ROOM, ROOM), mat(0x3b4046)); floor.rotation.x = -Math.PI / 2; floor.position.set(cx, 0, cz); scene.add(floor);
-  const wall = mat(0x4a4f57);
-  box(ROOM, H, th, cx, H / 2, z0, wall);             // north
-  box(ROOM, H, th, cx, H / 2, z0 + ROOM, wall);      // south
-  box(th, H, ROOM, x0, H / 2, cz, wall);             // west
-  // east wall with an arched doorway two tiles wide, centred like the game's doorways (tiles 4 and 5)
-  const door0 = z0 + 4, door1 = z0 + 6;
-  box(th, H, door0 - z0, x0 + ROOM, H / 2, (z0 + door0) / 2, wall);
-  box(th, H, z0 + ROOM - door1, x0 + ROOM, H / 2, (door1 + z0 + ROOM) / 2, wall);
-  const arch = new T.Mesh(new T.TorusGeometry(1, 0.22, 8, 16, Math.PI), mat(0x6a6f76));
-  arch.position.set(x0 + ROOM, 2, (door0 + door1) / 2); arch.rotation.y = Math.PI / 2; scene.add(arch);
-  R3.scene = scene; R3.room = room; R3.target = new T.Vector3(cx, 0, cz);
+/* ----- Step 2: the place as geometry, rebuilt once per visit, door states read from the simulation each frame ----- */
+const WALL_H = 2.4, PILLAR_H = 1.6, DOOR_H = 2.1;
+const DOOR_COL = { open: 0x6fe3d2, closed: 0xffc46b, memory: 0x9aa0a8 };
+function tileHash(x, y) { let h = (x * 374761393 + y * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+function doorGeom(k) {   // world-space span of a doorway's two tiles
+  const e = G.Z.edges[k], [a, b] = e.tiles;
+  const x0 = Math.min(a[0], b[0]), y0 = Math.min(a[1], b[1]);
+  return e.v ? { v: true, cx: x0 + 0.5, cz: y0 + 1, w: 2 } : { v: false, cx: x0 + 1, cz: y0 + 0.5, w: 2 };
 }
-function r3Camera() {
+function glowMaterial(T) {   // the threshold strip: colour and strength set per frame from the door's shown state
+  return new T.ShaderMaterial({
+    uniforms: { uCol: { value: new T.Color(0xffffff) }, uA: { value: 0 }, uFlick: { value: 0 }, uTime: { value: 0 } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'uniform vec3 uCol; uniform float uA, uFlick, uTime; varying vec2 vUv;' +
+      'void main(){ float edge = smoothstep(0.0, 0.5, vUv.y) * smoothstep(1.0, 0.5, vUv.y) * smoothstep(0.0, 0.12, vUv.x) * smoothstep(1.0, 0.88, vUv.x);' +
+      ' float f = 1.0 - uFlick * (0.5 + 0.5 * sin(uTime * 17.0) * sin(uTime * 5.3));' +
+      ' gl_FragColor = vec4(uCol, uA * edge * f); }',
+    transparent: true, depthWrite: false, blending: T.AdditiveBlending
+  });
+}
+function r3BuildZone() {
+  const T = R3.T, Z = G.Z, B = BIOMES[Z.z.biome] || BIOMES[0];
+  const scene = new T.Scene();
+  scene.background = new T.Color(0x020409);
+  scene.add(new T.HemisphereLight(0x9fb1c4, 0x10141c, 1.25));
+  const sun = new T.DirectionalLight(0xc8d4e0, 1.0); sun.position.set(-20, 40, 30); scene.add(sun);
+  const col = (c, k = 1) => new T.Color(`rgb(${Math.round(c[0] * k)},${Math.round(c[1] * k)},${Math.round(c[2] * k)})`);
+  // floor: the place's painted flagstones, the same canvas the 2D renderer uses
+  const tex = new T.CanvasTexture(G.floor); tex.colorSpace = T.SRGBColorSpace; tex.anisotropy = 4;
+  const floor = new T.Mesh(new T.PlaneGeometry(Z.GW, Z.GH), new T.MeshLambertMaterial({ map: tex }));
+  floor.rotation.x = -Math.PI / 2; floor.position.set(Z.GW / 2, 0, Z.GH / 2); scene.add(floor);
+  // walls: one instanced box per wall tile (doorway tiles excluded), tone varied by a tile hash
+  const tiles = [];
+  for (let y = 0; y < Z.GH; y++) for (let x = 0; x < Z.GW; x++) { const k = x + y * Z.GW; if (Z.wall[k] && Z.doorTile[k] < 0) tiles.push([x, y]); }
+  const walls = new T.InstancedMesh(new T.BoxGeometry(1, 1, 1), new T.MeshLambertMaterial({ color: 0xffffff }), tiles.length);
+  const m = new T.Matrix4(), q = new T.Quaternion(), sc = new T.Vector3(), ps = new T.Vector3();
+  tiles.forEach(([x, y], n) => {
+    const edge = x % ROOM === 0 || y % ROOM === 0, h = edge ? WALL_H : PILLAR_H, nudge = tileHash(x, y) < 0.12 ? (tileHash(y, x) < 0.5 ? -0.06 : 0.06) : 0;
+    m.compose(ps.set(x + 0.5 + nudge, h / 2, y + 0.5), q, sc.set(1, h, 1)); walls.setMatrixAt(n, m);
+    walls.setColorAt(n, col(B.wall, 0.88 + tileHash(x * 3, y * 7) * 0.22));
+  });
+  scene.add(walls);
+  // doorways
+  const stone = new T.MeshLambertMaterial({ color: col(B.wall, 0.75) }), iron = new T.MeshLambertMaterial({ color: col(B.metal, 0.7) }), brass = new T.MeshLambertMaterial({ color: 0xd6bc78 });
+  const archMat = new T.MeshLambertMaterial({ color: col(B.cap, 0.9) });
+  R3.doors = Z.edges.map((e, k) => {
+    const g = doorGeom(k), grp = new T.Group(); grp.position.set(g.cx, 0, g.cz); if (g.v) grp.rotation.y = Math.PI / 2;
+    // local frame: the opening runs along x (width 2), the wall thickness along z
+    const lintel = new T.Mesh(new T.BoxGeometry(2, WALL_H - DOOR_H, 1), archMat); lintel.position.y = (WALL_H + DOOR_H) / 2;
+    const arch = new T.Mesh(new T.TorusGeometry(0.95, 0.09, 6, 18, Math.PI), archMat); arch.position.y = DOOR_H - 0.95 + 0.02; arch.scale.y = 0.55; arch.position.y = DOOR_H - 0.55;
+    const slabMat = stone.clone(); slabMat.transparent = true;
+    slabMat.userData = { lit: stone.color.clone(), mem: new T.Color(DOOR_COL.memory) };   // fixed at build time
+    const slab = new T.Mesh(new T.BoxGeometry(2, DOOR_H, 0.8), slabMat); slab.position.y = DOOR_H / 2;
+    const strapA = new T.Mesh(new T.BoxGeometry(0.12, DOOR_H * 0.9, 0.86), iron), strapB = strapA.clone();
+    strapA.position.set(-0.55, 0, 0); strapB.position.set(0.55, 0, 0); slab.add(strapA, strapB);
+    const glowMat = glowMaterial(T), glow = new T.Mesh(new T.PlaneGeometry(2, 1.6), glowMat); glow.rotation.x = -Math.PI / 2; glow.position.y = 0.02;
+    const brackets = new T.Group();
+    for (const s of [-1, 1]) { const b = new T.Mesh(new T.BoxGeometry(0.1, 0.5, 0.5), brass); b.position.set(s * 1.08, 1.2, 0.55); const b2 = b.clone(); b2.position.z = -0.55; brackets.add(b, b2); }
+    const dustGeo = new T.BufferGeometry(), dp = new Float32Array(16 * 3); dustGeo.setAttribute('position', new T.BufferAttribute(dp, 3));
+    const dust = new T.Points(dustGeo, new T.PointsMaterial({ color: col(B.mineral), size: 0.09, transparent: true, depthWrite: false }));
+    grp.add(lintel, arch, slab, glow, brackets, dust);
+    scene.add(grp);
+    return { grp, slab, slabMat, glow, glowMat, brackets, dust, dustAt: -99, shown: null, label: null };
+  });
+  R3.scene = scene; R3.zone = G; R3.floorTex = tex;
+  R3.target = new T.Vector3(); R3.room = -1;
+}
+function r3DoorLabel(k) {   // what this doorway may show right now; truth only while the simulation says it is lit
+  const e = G.Z.edges[k], lit = G.t - G.doorSeenT[k] < 0.05;
+  const shown = lit ? (e.open ? 'open' : 'closed') : G.mem[k] === 1 ? 'open' : G.mem[k] === 0 ? 'closed' : 'unknown';
+  if (!lit) return { lit, shown, label: shown === 'unknown' ? 'unknown' : 'unlit' };
+  const dock = e.a === G.Z.dockR || e.b === G.Z.dockR;
+  if (!dock && doorPinned(k) && G.beacons.some(b => b.lit)) return { lit, shown, label: 'pinned' };
+  if (G.t - (e.changedAt ?? -99) < 25) return { lit, shown, label: 'settling' };
+  return { lit, shown, label: shown };
+}
+function r3UpdateDoors() {
+  const t = G.t, flick = S.flicker && S.motion ? 1 : 0;
+  R3.doors.forEach((d, k) => {
+    const st = r3DoorLabel(k), e = G.Z.edges[k];
+    d.shown = st.shown; d.label = st.label;
+    d.slab.visible = st.shown === 'closed';
+    d.slabMat.opacity = st.lit ? 1 : 0.42;
+    d.slabMat.color.copy(st.lit ? d.slabMat.userData.lit : d.slabMat.userData.mem);
+    const u = d.glowMat.uniforms;
+    u.uTime.value = t;
+    if (st.shown === 'unknown') u.uA.value = 0;
+    else if (!st.lit) { u.uCol.value.setHex(DOOR_COL.memory); u.uA.value = 0.14; u.uFlick.value = 0.35 * flick; }
+    else { u.uCol.value.setHex(st.shown === 'open' ? DOOR_COL.open : DOOR_COL.closed); u.uA.value = st.shown === 'open' ? 0.3 : 0.38; u.uFlick.value = 0; }
+    d.brackets.visible = st.label === 'pinned';
+    // settling: a short burst of grit the first time a fresh change is lit
+    if (st.lit && t - (e.changedAt ?? -99) < 25 && d.dustAt < (e.changedAt ?? -99) && S.motion) d.dustAt = t;
+    const age = t - d.dustAt; d.dust.visible = age >= 0 && age < 1.6 && st.lit;
+    if (d.dust.visible) {
+      const p = d.dust.geometry.attributes.position;
+      for (let n = 0; n < 16; n++) { const a = tileHash(k, n) * TAU, r = 0.3 + tileHash(n, k) * 0.8; p.setXYZ(n, Math.cos(a) * r, Math.max(0.03, 2.0 - age * (1.1 + tileHash(n + 7, k)) * 1.2), Math.sin(a) * r * 0.5); }
+      p.needsUpdate = true; d.dust.material.opacity = 1 - age / 1.6;
+    }
+  });
+}
+function r3Camera() {   // authored per room: centred on the Warden's room, from 42 degrees
+  const room = roomAt(G.p.x, G.p.y);
+  if (room !== R3.room) { const Z = G.Z; R3.room = room; R3.target.set((room % Z.RW) * ROOM + ROOM / 2, 0, Math.floor(room / Z.RW) * ROOM + ROOM / 2); }
   const c = R3.camera, t = R3.target;
   c.position.set(t.x, t.y + CAM3.dist * Math.sin(CAM3.pitch), t.z + CAM3.dist * Math.cos(CAM3.pitch));
   c.lookAt(t);
+  c.updateMatrixWorld();
+}
+function r3Project(x, y, h) {   // sim position (px) to CSS pixels, for tests and screen-space overlays
+  const v = new R3.T.Vector3(x / T, h || 0, y / T).project(R3.camera);
+  return { x: (v.x + 1) / 2 * window.innerWidth, y: (1 - v.y) / 2 * window.innerHeight, behind: v.z > 1 };
 }
 function renderZone3d() {
-  const room = roomAt(G.p.x, G.p.y);
-  if (!R3.scene || R3.room !== room || R3.zone !== G) { r3Graybox(room); R3.zone = G; }
+  if (R3.zone !== G) r3BuildZone();
   r3Camera();
+  r3UpdateDoors();
   R3.renderer.render(R3.scene, R3.camera);
 }
 function renderOverlay2d() {   // the 2D canvas becomes a transparent layer for the HUD
@@ -3377,7 +3461,9 @@ if (DEBUG) {
     teleport(x, y) { G.p.x = x; G.p.y = y; G.cam.x = x; G.cam.y = y; },
     guide() { return guideState(); },
     QUALITY, stall(ms) { debugStall = ms; }, get frameWorkMs() { return +workAvg.toFixed(2); },
-    get r3() { return R3.status; }, get r3Error() { return R3.error; }
+    get r3() { return R3.status; }, get r3Error() { return R3.error; },
+    r3Doors() { return R3.doors ? R3.doors.map((d, k) => ({ k, shown: d.shown, label: d.label, slab: d.slab.visible, glow: d.glowMat.uniforms.uA.value, brackets: d.brackets.visible })) : null; },
+    r3Project(x, y, h) { return r3Project(x, y, h); }
   };
 }
 applyPresentation();

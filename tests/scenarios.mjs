@@ -281,6 +281,40 @@ await scenario('3d step 1: Three.js loads on demand, WebGL2 draws the room under
   await pg.shot('3D-step1-graybox');
 }, { query: '&r3d=1', seed: 11 });
 
+await scenario('3d step 2: doorways show the truth only while lit; otherwise the Warden\'s memory, or nothing', async pg => {
+  await pg.waitForFunction(() => MS.r3 === 'ready' || MS.r3 === 'failed', null, { timeout: 15000 });
+  await beginFirstPlace(pg);
+  await pg.waitForTimeout(400);
+  const r = await pg.evaluate(async () => {
+    const G = MS.G, Z = G.Z, frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await frame();
+    let doors = MS.r3Doors();
+    const litWrong = doors.filter(d => G.t - G.doorSeenT[d.k] < 0.05 && (d.shown !== (Z.edges[d.k].open ? 'open' : 'closed') || d.slab !== !Z.edges[d.k].open));
+    // pick a doorway far from any light and plant a false memory of it
+    const far = Z.edges.map((e, k) => k).filter(k => G.t - G.doorSeenT[k] > 1 && !MS.doorPinned(k));
+    const k = far[0], truth = Z.edges[k].open ? 1 : 0;
+    G.mem[k] = 1 - truth; G.doorSeenT[k] = -9;
+    const k2 = far[1]; G.mem[k2] = -1; G.doorSeenT[k2] = -9;
+    await frame(); doors = MS.r3Doors();
+    const mem = doors[k], unk = doors[k2];
+    // pin: walk one room east of the dock (the dock's own doorways are always held), plant a beacon, light a pinned door
+    const east = Z.dockR + 1; MS.teleport(((east % Z.RW) * 9 + 5) * 32, (Math.floor(east / Z.RW) * 9 + 5) * 32);
+    G.beacons.push({ x: G.p.x, y: G.p.y, lit: true, c: 1, old: false, placedT: G.t });
+    const pinK = Z.edges.findIndex((e, j) => MS.doorPinned(j) && e.a !== Z.dockR && e.b !== Z.dockR);
+    if (pinK >= 0) G.doorSeenT[pinK] = G.t + 999;   // treat as lit for this check
+    await frame(); const pin = pinK >= 0 ? MS.r3Doors()[pinK] : null;
+    return { n: doors.length, litChecked: doors.filter(d => d.label !== 'unlit' && d.label !== 'unknown').length, litWrong: litWrong.length,
+      mem: { label: mem.label, shown: mem.shown, slab: mem.slab, truth }, unk: { label: unk.label, slab: unk.slab, glow: unk.glow }, pin };
+  });
+  assert(r.n > 0 && r.litChecked > 0, 'some doorways are lit to check: ' + JSON.stringify(r));
+  assert(r.litWrong === 0, 'every lit doorway shows its true state');
+  // the false memory: truth open (1) is remembered closed, so a slab shows; truth closed (0) is remembered open, so none does
+  assert(r.mem.label === 'unlit' && r.mem.shown === (r.mem.truth ? 'closed' : 'open') && r.mem.slab === (r.mem.truth === 1), 'an unlit doorway shows memory, not truth: ' + JSON.stringify(r.mem));
+  assert(r.unk.label === 'unknown' && !r.unk.slab && r.unk.glow === 0, 'a never-seen doorway shows nothing: ' + JSON.stringify(r.unk));
+  assert(r.pin && r.pin.label === 'pinned' && r.pin.brackets, 'a lit, pinned doorway shows its brackets: ' + JSON.stringify(r.pin));
+  await pg.shot('3D-step2-doors');
+}, { query: '&r3d=1', seed: 11 });
+
 /* ---------- Milestone C: audio, captions, accessibility, persistence ---------- */
 await scenario('audio: nothing before a gesture; buses independent; mute; nodes released', async pg => {
   assert(await pg.evaluate(() => MS.audioStats()) === null, 'no AudioContext before the player interacts');
