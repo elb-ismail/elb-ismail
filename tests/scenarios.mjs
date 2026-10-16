@@ -648,6 +648,464 @@ await scenario('3d normal input: mouse aims through the 3D camera, keys walk the
   await pg.shot('3D-step4-normal-input');
 }, { query: '&r3d=1', seed: 11 });
 
+/* ---------- Step 5A: the Survey lens in 3D ---------- */
+// What 3D drew for Survey (after MS.r3Frame) against the 2D rule computed from raw state (drawSurveyLens): every
+// doorway within 760 px shows its true state, PINNED when held, and within 420 px when it was last lit; none beyond.
+const defineSurveyCheck = pg => pg.evaluate(() => {
+  window.doorAt = e => e.v ? { x: (e.i + 1) * 288 + 16, y: (e.j * 9 + 5) * 32 } : { x: (e.i * 9 + 5) * 32, y: (e.j + 1) * 288 + 16 };
+  window.surveyCheck = () => {
+    const G = MS.G, P = G.p, drawn = MS.r3Survey(), byK = new Map(drawn.map(d => [d.k, d])), bad = [];
+    G.Z.edges.forEach((e, k) => {
+      const c = doorAt(e), d = Math.hypot(c.x - P.x, c.y - P.y), ago = G.t - G.doorSeenT[k], got = byK.get(k);
+      if (d > 760) { if (got) bad.push({ k, why: 'drawn beyond 760 px', d }); return; }
+      const tag = MS.doorPinned(k) ? 'PINNED' : e.open ? 'OPEN' : 'SHUT', ageWanted = d < 420 && ago > 1;
+      if (!got) { const p = MS.r3Project(c.x, c.y, 0.02); if (!p.behind && p.x > 0 && p.y > 0 && p.x < innerWidth && p.y < innerHeight) bad.push({ k, why: 'in reach and on screen but not drawn' }); return; }
+      const ageOk = !ageWanted ? got.age === null : G.doorSeenT[k] < 0 ? got.age === 'never lit' : /^lit \d+:\d\d ago$/.test(got.age);
+      if (got.tag !== tag || got.state !== (e.open ? 'open' : 'closed') || !ageOk || got.provenance !== 'ledgerEarned') bad.push({ k, tag, got, ageWanted });
+    });
+    return { n: drawn.length, bad };
+  };
+});
+const noThreeWarnings = pg => { const w = pg.warnings.filter(x => /THREE\./.test(x)); assert(w.length === 0, 'no Three.js warnings: ' + w.join(' | ')); };
+const r3ready = pg => pg.waitForFunction(() => MS.r3 === 'ready' || MS.r3 === 'failed', null, { timeout: 15000 });
+
+await scenario('survey A: normal input raises Survey, crosses into the next room with it up, and lowers it', async pg => {
+  // no teleport, no debug aim, no state edits: clicks, mouse, keys. MS.hold only freezes the clock to measure a frame.
+  await r3ready(pg); await beginFirstPlace(pg); await defineSurveyCheck(pg);
+  await pg.mouse.move(1080, 350);
+  await pg.keyboard.press('4');
+  await gameWait(pg, 0.4);
+  await pg.evaluate(() => MS.hold(true));
+  const a = await pg.evaluate(() => { MS.r3Frame(); return { lens: MS.G.p.lens, grid: MS.R3.survey.grid.visible, chk: surveyCheck(), room: MS.R3.room }; });
+  assert(a.lens === 3 && a.grid, 'key 4 raises Survey: ' + JSON.stringify(a));
+  assert(a.chk.n > 0 && a.chk.bad.length === 0, 'Survey draws exactly what the 2D rule shows: ' + JSON.stringify(a.chk));
+  await pg.shot('survey-01-full-light');
+  await pg.evaluate(() => MS.hold(false));
+  await pg.keyboard.down('d');
+  try { await pg.waitForFunction(r0 => MS.R3.room !== r0, a.room, { timeout: 30000 }); } finally { await pg.keyboard.up('d'); }
+  await gameWait(pg, 0.2);
+  await pg.evaluate(() => MS.hold(true));
+  const b = await pg.evaluate(() => {
+    MS.r3Frame();
+    const G = MS.G, P = G.p, Z = G.Z, e = MS.r3Entities().warden;
+    return { lens: P.lens, room: MS.R3.room, simRoom: Math.floor(P.y / 288) * Z.RW + Math.floor(P.x / 288), chk: surveyCheck(), dx: e.x - P.x, dy: e.y - P.y };
+  });
+  assert(b.lens === 3 && b.room !== a.room && b.room === b.simRoom, 'Survey stays up across the camera move to the Warden\'s new room: ' + JSON.stringify({ a: a.room, b }));
+  assert(b.chk.n > 0 && b.chk.bad.length === 0 && Math.hypot(b.dx, b.dy) < 0.5, 'after the move, Survey and the Warden still match the simulation: ' + JSON.stringify(b));
+  await pg.shot('survey-09-camera-transition');
+  await pg.evaluate(() => MS.hold(false));
+  await pg.keyboard.press('4');
+  await gameWait(pg, 0.2);
+  await pg.evaluate(() => MS.hold(true));
+  const c = await pg.evaluate(() => { MS.r3Frame(); return { lens: MS.G.p.lens, drawn: MS.r3Survey().length, grid: MS.R3.survey.grid.visible }; });
+  assert(c.lens === 0 && c.drawn === 0 && !c.grid, 'key 4 again lowers Survey and its marks go: ' + JSON.stringify(c));
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('survey B: an unlit, never-observed doorway out of Survey reach shows nothing at all', async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineSurveyCheck(pg);
+  const k = await pg.evaluate(() => {
+    const G = MS.G, P = G.p; G.hollows.forEach(h => h.dead = true);
+    return G.Z.edges.findIndex((e, k) => G.doorSeenT[k] < 0 && G.mem[k] === -1 && Math.hypot(doorAt(e).x - P.x, doorAt(e).y - P.y) > 900);
+  });
+  assert(k >= 0, 'setup: a never-lit, never-remembered doorway more than 900 px away');
+  await pg.keyboard.press('4');
+  await gameWait(pg, 1.0);   // four Survey scans
+  await pg.evaluate(() => MS.hold(true));
+  const r = await pg.evaluate(k => {
+    MS.r3Frame();
+    const G = MS.G;
+    return { lens: G.p.lens, pres: MS.lensPresentation({ kind: 'door', k }, 3), door: MS.r3Doors()[k], drawn: MS.r3Survey().some(d => d.k === k),
+      mem: G.mem[k], seen: G.doorSeenT[k], chk: surveyCheck(), neverLitNear: MS.r3Survey().filter(d => d.age === 'never lit').length };
+  }, k);
+  assert(r.lens === 3, 'Survey is up');
+  assert(r.pres.provenance === 'unknown' && r.pres.survey === null && !r.pres.brackets && r.pres.shown === 'unknown', 'presentation: unknown, nothing to show: ' + JSON.stringify(r.pres));
+  assert(r.door.shown === 'unknown' && !r.door.slab && r.door.glow === 0 && !r.door.brackets, '3D doorway: no slab, no glow, no brackets: ' + JSON.stringify(r.door));
+  assert(!r.drawn, 'no Survey glyph, tag or age for it');
+  assert(r.mem === -1 && r.seen < 0, 'the simulation learned nothing about it either: ' + JSON.stringify(r));
+  assert(r.chk.bad.length === 0, 'every doorway Survey does draw follows the 2D rule: ' + JSON.stringify(r.chk));
+  await pg.shot('survey-B-unknown-doorway');
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('survey C: a doorway changed while unseen shows memory until Survey reaches it, then the earned truth', async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineSurveyCheck(pg);
+  const s = await pg.evaluate(() => {
+    const G = MS.G, Z = G.Z, east = Z.dockR + 1, rc = { x: ((east % Z.RW) * 9 + 5) * 32, y: (Math.floor(east / Z.RW) * 9 + 5) * 32 };
+    G.hollows.forEach(h => h.dead = true);
+    const k = Z.edges.findIndex(e => e.v && e.a === east), c = doorAt(Z.edges[k]);
+    // observe it: stand in the room and shine the lantern on it
+    MS.teleport(rc.x, rc.y); G.debugAim = Math.atan2(c.y - rc.y, c.x - rc.x);
+    for (let i = 0; i < 6; i++) MS.update(1 / 30);
+    const observed = { seenAgo: G.t - G.doorSeenT[k], open: Z.edges[k].open, mem: G.mem[k] };
+    // walk far away (setup), then the doorway changes while nobody can see it. The simulation only shifts doorways
+    // at random, so the change is applied directly, as tryShift would: flip it and mark when it changed.
+    let far = null;
+    for (let r = 0; r < Z.NR && !far; r++) { const x = ((r % Z.RW) * 9 + 5) * 32, y = (Math.floor(r / Z.RW) * 9 + 5) * 32; if (Math.hypot(x - c.x, y - c.y) > 900) far = { x, y }; }
+    MS.teleport(far.x, far.y); G.debugAim = 0; MS.update(1 / 30);
+    Z.edges[k].open = !Z.edges[k].open; Z.edges[k].changedAt = G.t;
+    return { k, rc, observed, now: Z.edges[k].open, far };
+  });
+  assert(s.observed.seenAgo < 0.05 && s.observed.mem === (s.observed.open ? 1 : 0), 'setup: the doorway was seen and remembered: ' + JSON.stringify(s.observed));
+  await pg.keyboard.press('4');
+  await gameWait(pg, 1.0);
+  await pg.evaluate(() => MS.hold(true));
+  const away = await pg.evaluate(k => {
+    MS.r3Frame(); const G = MS.G;
+    return { lens: G.p.lens, mem: G.mem[k], door: MS.r3Doors()[k], pres: MS.lensPresentation({ kind: 'door', k }, 3), drawn: MS.r3Survey().some(d => d.k === k), found: MS.events.some(ev => ev.type === 'doorDiscovered' && ev.k === k), chk: surveyCheck() };
+  }, s.k);
+  const oldShown = s.observed.open ? 'open' : 'closed';
+  assert(away.lens === 3, 'Survey is up');
+  assert(away.door.label === 'unlit' && away.door.shown === oldShown && away.pres.provenance === 'remembered' && away.pres.survey === null, 'out of reach, the doorway shows the remembered state only: ' + JSON.stringify(away));
+  assert(!away.drawn && away.mem === (s.observed.open ? 1 : 0) && !away.found, 'Survey did not read it and memory is unchanged: ' + JSON.stringify(away));
+  assert(away.chk.bad.length === 0, 'Survey matches the 2D rule: ' + JSON.stringify(away.chk));
+  // back into reach, still unlit: Survey reads the true doorway (the 2D rule) and the simulation records the discovery
+  await pg.evaluate(rc => { const G = MS.G; MS.teleport(rc.x, rc.y + 60); G.debugAim = Math.PI / 2; MS.hold(false); }, s.rc);
+  await gameWait(pg, 0.6);
+  await pg.evaluate(() => MS.hold(true));
+  const near = await pg.evaluate(k => {
+    MS.r3Frame(); const G = MS.G, sv = MS.r3Survey().find(d => d.k === k);
+    return { seenAgo: G.t - G.doorSeenT[k], mem: G.mem[k], door: MS.r3Doors()[k], sv, found: MS.events.filter(ev => ev.type === 'doorDiscovered' && ev.k === k).map(ev => ev.how), chk: surveyCheck() };
+  }, s.k);
+  assert(near.seenAgo > 0.05 && near.door.label === 'unlit', 'setup: the doorway is still unlit, so the 3D doorway itself never shows it lit: ' + JSON.stringify(near));
+  assert(near.sv && near.sv.state === (s.now ? 'open' : 'closed') && near.sv.provenance === 'ledgerEarned', 'in reach, Survey shows the earned true state: ' + JSON.stringify(near));
+  assert(near.mem === (s.now ? 1 : 0) && near.found.includes('survey'), 'the simulation learned it by Survey: ' + JSON.stringify(near));
+  assert(near.chk.bad.length === 0, 'Survey matches the 2D rule: ' + JSON.stringify(near.chk));
+  await pg.shot('survey-08-changed-unseen');
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('survey D: a real beacon (B key) pins an unlit doorway; brackets only during the 1.2 s flash, state never lit', async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineSurveyCheck(pg);
+  const k = await pg.evaluate(() => {
+    // 40 px west of the centre of the room east of the dock, facing west: the room's east doorway is pinned by a beacon
+    // dropped here but about 184 px away, beyond its 150 px light, and behind the lantern (as in "3d brackets")
+    const G = MS.G, Z = G.Z, east = Z.dockR + 1;
+    MS.teleport(((east % Z.RW) * 9 + 5) * 32 - 40, (Math.floor(east / Z.RW) * 9 + 5) * 32);
+    G.hollows.forEach(h => h.dead = true); G.debugAim = Math.PI; MS.update(0.016);
+    return Z.edges.findIndex(e => e.v && e.a === east);
+  });
+  await pg.keyboard.press('4');
+  await gameWait(pg, 0.6);
+  const look = k => pg.evaluate(k => {
+    MS.r3Frame(); const G = MS.G, e = G.Z.edges[k], c = doorAt(e), b = G.beacons[G.beacons.length - 1];
+    const pres = MS.lensPresentation({ kind: 'door', k }, 3);
+    // the brackets must not depend on whether the doorway is open: ask again with it flipped, then put it back
+    e.open = !e.open; const flipped = MS.lensPresentation({ kind: 'door', k }, 3); e.open = !e.open;
+    return { door: MS.r3Doors()[k], pres: { label: pres.label, brackets: pres.brackets, bracketA: pres.bracketA }, sameIfFlipped: flipped.brackets === pres.brackets && flipped.bracketA === pres.bracketA,
+      pinned: MS.doorPinned(k), dist: b ? Math.round(Math.hypot(c.x - b.x, c.y - b.y)) : null, seenAgo: G.t - G.doorSeenT[k], flashAgo: G.pinFlash ? G.t - G.pinFlash.t : null, lens: G.p.lens, chk: surveyCheck() };
+  }, k);
+  await pg.evaluate(() => MS.hold(true));
+  const before = await look(k);
+  await pg.shot('survey-05-pinned-before');
+  await pg.evaluate(() => MS.hold(false));
+  const t0 = await pg.evaluate(() => MS.G.t);
+  await pg.keyboard.press('b');
+  await pg.waitForFunction(t0 => MS.G.pinFlash && MS.G.pinFlash.t >= t0, t0, { timeout: 10000 });
+  await pg.evaluate(() => MS.hold(true));
+  const during = await look(k);
+  await pg.shot('survey-06-pinned-during-flash');
+  const fade = await pg.evaluate(k => { MS.update(0.4); MS.r3Frame(); return MS.lensPresentation({ kind: 'door', k }, 3).bracketA; }, k);
+  await pg.evaluate(() => MS.hold(false));
+  await gameWait(pg, 1.3);
+  await pg.evaluate(() => MS.hold(true));
+  const after = await look(k);
+  await pg.shot('survey-07-pinned-after');
+  const memOnly = x => x.door.label === 'unlit' || x.door.label === 'unknown';
+  assert(before.lens === 3 && !before.door.brackets && memOnly(before), 'before the beacon: no brackets, doorway shows memory only: ' + JSON.stringify(before));
+  assert(during.pinned && during.dist > 150 && during.seenAgo > 0.1 && during.flashAgo < 1.2, 'setup: pinned, beyond the beacon light, unlit, inside the flash: ' + JSON.stringify(during));
+  assert(during.door.brackets && memOnly(during), 'during the flash: brackets, and the doorway still shows memory only: ' + JSON.stringify(during));
+  assert(during.pres.bracketA > fade && fade >= 0.55, 'the brackets fade with the flash: ' + during.pres.bracketA + ' then ' + fade);
+  assert(during.sameIfFlipped && before.sameIfFlipped && after.sameIfFlipped, 'brackets are identical for an open and a shut doorway');
+  assert(!after.door.brackets && after.seenAgo > 0.1 && after.flashAgo > 1.2 && memOnly(after), 'after the flash: no brackets on the unlit doorway: ' + JSON.stringify(after));
+  for (const x of [before, during, after]) assert(x.chk.bad.length === 0, 'Survey matches the 2D rule: ' + JSON.stringify(x.chk));
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('survey E: with Survey up, unlit and walled-off entities give no signal in WebGL or on the overlay', async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineSurveyCheck(pg);
+  await pg.keyboard.press('4');
+  await gameWait(pg, 0.4);
+  await pg.evaluate(() => MS.hold(true));
+  const r = await pg.evaluate(() => {
+    const G = MS.G, Z = G.Z, east = Z.dockR + 1, P = G.p, cv = document.getElementById('game'), c2 = cv.getContext('2d'), dpr = cv.width / innerWidth;
+    const over = pts => pts.map(([x, y]) => Array.from(c2.getImageData(Math.round(x * dpr) - 1, Math.round(y * dpr) - 1, 3, 3).data).join(','));
+    const rc = { x: ((east % Z.RW) * 9 + 5) * 32, y: (Math.floor(east / Z.RW) * 9 + 5) * 32 };
+    MS.teleport(rc.x, rc.y - 96); G.debugAim = -Math.PI / 2;
+    const hol = G.hollows[0], mimic = G.signals.find(s => !s.real), kinds = [...new Set(G.items.map(i => i.kind))], items = kinds.map(k => G.items.find(i => i.kind === k));
+    G.hollows.slice(1).forEach(h => h.dead = true);
+    G.escorts.push({ name: 'Test', trait: G.signals.find(s => s.real).trait, x: P.x, y: P.y, shaken: true, shakeT: 99, home: false, walk: 0, ang: 0 });
+    const esc = G.escorts[G.escorts.length - 1];
+    const ents = [['hollow', hol, 0.15], ['mimic', mimic, 0.35], ['escort', esc, 0.35], ...items.map(i => ['item:' + i.kind, i, { ember: 0.15, salvage: 0.08, relic: 0.32 }[i.kind] || 0.22])];
+    MS.update(0.001); MS.r3Frame();
+    const pk = [];
+    for (let i = 0; i < Z.GW * Z.GH && pk.length < ents.length; i++) { const x = (i % Z.GW + 0.5) * 32, y = (Math.floor(i / Z.GW) + 0.5) * 32, p = MS.r3Project(x, y, 0); if (!Z.wall[i] && (p.x < -200 || p.y < -200 || p.x > innerWidth + 200 || p.y > innerHeight + 200) && !pk.some(q => Math.hypot(q.x - x, q.y - y) < 64)) pk.push({ x, y }); }
+    ents.forEach(([, e], i) => { e.x = pk[i].x; e.y = pk[i].y; }); hol.emerge = 0;
+    MS.update(0.001); MS.update(0.001); MS.r3Frame();
+    const wallOn = (x1, y1) => { for (let s = 0; s <= 1; s += 1 / 64) { const x = P.x + (x1 - P.x) * s, y = P.y + (y1 - P.y) * s; if (Z.wall[Math.floor(x / 32) + Math.floor(y / 32) * Z.GW]) return true; } return false; };
+    const cand = [];
+    for (let ty = 0; ty < Z.GH; ty++) for (let tx = 0; tx < Z.GW; tx++) {
+      if (Z.wall[tx + ty * Z.GW]) continue;
+      const x = (tx + 0.5) * 32, y = (ty + 0.5) * 32, p = MS.r3Project(x, y, 0);
+      // the whole canvas less 10 px: WebGL readback is not covered by the HUD, and the overlay check below compares
+      // the 2D layer at the same pixels with and without the entity, so HUD pixels compare equal
+      if (p.behind || p.x < 10 || p.x > innerWidth - 10 || p.y < 10 || p.y > innerHeight - 10) continue;
+      let m = 0; for (const dx of [-40, 0, 40]) for (const dy of [-40, 0, 40]) m = Math.max(m, MS.r3MaskAt(x + dx, y + dy));
+      // strict: nothing at all in front of this floor, not even a remembered doorway's translucent glass or glow
+      // (with doorway objects hidden, the two spots first picked here read 26 and 6.1 -> 0 and 0)
+      if (m > 0.05 || !MS.r3FloorVisible(x, y, true).visible) continue;
+      cand.push({ x, y, noEyes: Math.hypot(x - P.x, y - P.y) > 270 || wallOn(x, y) });
+    }
+    const spots = [], far = cand.find(c => c.noEyes);
+    if (far) spots.push(far);
+    for (const c of cand) if (spots.length < ents.length && !spots.some(s => Math.hypot(s.x - c.x, s.y - c.y) < 40)) spots.push(c);   // 40 px: well clear of Hollow-escort contact (about 22 px)
+    if (!far || spots.length < ents.length) return { spots: spots.length, need: ents.length };
+    const pts = ents.map(([, , h], i) => { const p = MS.r3Project(spots[i].x, spots[i].y, h); return [p.x, p.y]; });
+    const floor = MS.r3Read(pts); MS.r3Frame(); const floorO = over(pts);
+    ents.forEach(([, e], i) => { e.x = spots[i].x; e.y = spots[i].y; }); hol.emerge = 0;
+    MS.update(0.001); MS.update(0.001);
+    ents.forEach(([, e], i) => { e.x = spots[i].x; e.y = spots[i].y; });
+    const dark = MS.r3Read(pts); MS.r3Frame(); const darkO = over(pts);
+    const darkVis = ents.map(([, e]) => !!e.vis && e !== esc);
+    const provs = ents.map(([n, e]) => [n, n === 'hollow' ? MS.lensPresentation({ kind: 'hollow', i: G.hollows.indexOf(e) }, 3).provenance : n === 'mimic' ? MS.lensPresentation({ kind: 'voice', i: G.signals.indexOf(e) }, 3).provenance : n === 'escort' ? 'escort' : MS.lensPresentation({ kind: 'item', i: G.items.indexOf(e) }, 3).provenance]);
+    const hi = MS.r3Entities().hollows[G.hollows.indexOf(hol)];
+    // a Hollow behind a wall, inside eye range: nothing at all, and the wall in front of it reads the same
+    let blocked = null;
+    for (let ty = 0; ty < Z.GH && !blocked; ty++) for (let tx = 0; tx < Z.GW; tx++) {
+      if (Z.wall[tx + ty * Z.GW]) continue;
+      const x = (tx + 0.5) * 32, y = (ty + 0.5) * 32, d = Math.hypot(x - P.x, y - P.y), p = MS.r3Project(x, y, 0.4);
+      let m = 0; for (const dx of [-40, 0, 40]) for (const dy of [-40, 0, 40]) m = Math.max(m, MS.r3MaskAt(x + dx, y + dy));
+      if (d > 120 && d < 230 && m <= 0.05 && wallOn(x, y) && !p.behind && p.x > 60 && p.x < innerWidth - 60 && p.y > 150 && p.y < innerHeight - 100) { blocked = { x, y, p: [p.x, p.y] }; break; }
+    }
+    let wall = null;
+    if (blocked) {
+      hol.x = pk[0].x; hol.y = pk[0].y; MS.update(0.001); hol.x = pk[0].x; hol.y = pk[0].y;
+      const w0 = MS.r3Read([blocked.p])[0]; MS.r3Frame(); const o0 = over([blocked.p])[0];
+      hol.x = blocked.x; hol.y = blocked.y; hol.emerge = 0; MS.update(0.001); hol.x = blocked.x; hol.y = blocked.y;
+      const w1 = MS.r3Read([blocked.p])[0]; MS.r3Frame(); const o1 = over([blocked.p])[0];
+      const e = MS.r3Entities().hollows[G.hollows.indexOf(hol)];
+      wall = { w0, w1, sameOverlay: o0 === o1, eyes: e.eyes, body: e.body, simVis: e.simVis, prov: MS.lensPresentation({ kind: 'hollow', i: G.hollows.indexOf(hol) }, 3).provenance };
+    }
+    const E = MS.R3.E, roots = [E.warden, E.cone, E.sanct.g, MS.R3.survey.grid, ...[...E.hollows.values()].map(o => o.g), ...[...E.figs.values()].map(o => o.g), ...[...E.items.values()].map(o => o.g)];
+    let casters = 0, reflective = 0;
+    for (const root of roots) root.traverse(o => { if (o.castShadow) casters++; });
+    MS.R3.scene.traverse(o => { for (const m of (o.material ? [].concat(o.material) : [])) if (m.envMap || m.isMeshStandardMaterial || m.isMeshPhysicalMaterial) reflective++; });
+    return { lens: P.lens, rows: ents.map(([n], i) => ({ n, floor: +floor[i].toFixed(1), dark: +dark[i].toFixed(1), sameOverlay: floorO[i] === darkO[i] })), darkVis, provs, hi, wall, casters, reflective, env: !!MS.R3.scene.environment, surveyOnly: MS.r3Survey().every(d => typeof d.k === 'number' && /^(OPEN|SHUT|PINNED)$/.test(d.tag)) };
+  });
+  assert(r.rows, 'enough dark floor on screen for every entity: ' + JSON.stringify(r));
+  if (process.env.VERBOSE) console.log('      readback', JSON.stringify(r.rows), JSON.stringify(r.wall));
+  assert(r.lens === 3, 'Survey is up');
+  assert(!r.darkVis.some(Boolean), 'setup: the simulation counts them all unlit');
+  for (const row of r.rows) assert(row.dark < 12 && Math.abs(row.dark - row.floor) <= 2 && row.sameOverlay, 'unlit ' + row.n + ' reads back at the unlit floor level, and the overlay is unchanged: ' + JSON.stringify(row));
+  for (const [n, p] of r.provs) assert(p === 'unknown' || p === 'escort', 'presentation of unlit ' + n + ' is unknown: ' + p);
+  assert(!r.hi.body && !r.hi.eyes, 'unlit Hollow beyond eye range: no body, no eyes: ' + JSON.stringify(r.hi));
+  assert(r.wall, 'setup: a dark spot behind a wall within eye range, on screen');
+  assert(!r.wall.simVis && !r.wall.body && !r.wall.eyes && r.wall.prov === 'unknown', 'behind a wall: no body, no eyes: ' + JSON.stringify(r.wall));
+  assert(Math.abs(r.wall.w1 - r.wall.w0) <= 2 && r.wall.sameOverlay, 'behind a wall: the pixels in front of it are unchanged: ' + JSON.stringify(r.wall));
+  assert(r.casters === 0 && r.reflective === 0 && !r.env, 'no shadow casters among entities or Survey marks, no reflective materials');
+  assert(r.surveyOnly, 'Survey draws only doorway marks');
+  await pg.shot('survey-04-entity-behind-wall');
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('survey F: Survey rendering never calls Math.random, the adapter is pure, and the simulation is unchanged', async pg => {
+  await r3ready(pg); await beginFirstPlace(pg);
+  const r = await pg.evaluate(() => {
+    const id = MS.G.node.id;
+    let simCalls = 0, cosCalls = 0, adapterRng = 0, adapterWrites = 0, adapterCalls = 0;
+    const fp = G => JSON.stringify({ t: G.t, seen: G.doorSeenT, mem: G.mem, open: G.Z.edges.map(e => e.open), p: [G.p.x, G.p.y, G.p.lens, G.p.aim], h: G.hollows.map(h => [h.x, h.y, h.vis, h.emerge]), s: G.signals.map(s => [s.x, s.y, s.vis]), it: G.items.map(i => [i.x, i.y, i.vis]), b: G.beacons.length, pin: G.pinFlash });
+    const run = render => {
+      const informed0 = MS.CH.exp.stats.lensInformed || 0;   // a chronicle counter: it carries over between runs
+      MS.seed(77); MS.enterZone(id);
+      const G = MS.G, Z = G.Z, east = Z.dockR + 1; G.debugAim = 0.6;
+      MS.teleport(((east % Z.RW) * 9 + 5) * 32, (Math.floor(east / Z.RW) * 9 + 5) * 32);
+      G.p.lens = 3;   // Survey up in both runs (setup: the lens changes the simulation, so both runs must have it)
+      for (let i = 0; i < 900; i++) {
+        MS.update(1 / 30);
+        if (i % 120 === 60) MS.emit('flareBurst', { f: { x: G.p.x, y: G.p.y }, result: {} });
+        if (!render) continue;
+        const mr = Math.random, cr = MS.rng.cosmetic;
+        Math.random = () => { simCalls++; return mr(); };
+        MS.rng.cosmetic = () => { cosCalls++; return cr(); };
+        try { MS.r3Frame(); } finally { Math.random = mr; MS.rng.cosmetic = cr; }
+        if (i % 30 === 0) {   // the adapter: every doorway and entity, every lens; no random numbers, no writes
+          const before = fp(G), saved = [Math.random, MS.rng.audio, MS.rng.visual, MS.rng.cosmetic], bump = f => () => { adapterRng++; return f(); };
+          Math.random = bump(saved[0]); MS.rng.audio = bump(saved[1]); MS.rng.visual = bump(saved[2]); MS.rng.cosmetic = bump(saved[3]);
+          try {
+            for (let lens = 0; lens < 4; lens++) {
+              G.Z.edges.forEach((e, k) => { MS.lensPresentation({ kind: 'door', k }, lens); adapterCalls++; });
+              G.hollows.forEach((h, j) => { MS.lensPresentation({ kind: 'hollow', i: j }, lens); adapterCalls++; });
+              G.signals.forEach((s, j) => { MS.lensPresentation({ kind: 'voice', i: j }, lens); adapterCalls++; });
+              G.items.forEach((s, j) => { MS.lensPresentation({ kind: 'item', i: j }, lens); adapterCalls++; });
+              G.beacons.forEach((s, j) => { MS.lensPresentation({ kind: 'beacon', i: j }, lens); adapterCalls++; });
+            }
+          } finally { [Math.random, MS.rng.audio, MS.rng.visual, MS.rng.cosmetic] = saved; }
+          if (fp(G) !== before) adapterWrites++;
+        }
+      }
+      return JSON.stringify({ doors: G.Z.edges.map(e => e.open ? 1 : 0).join(''), mem: G.mem.join(','), hollows: G.hollows.map(h => [Math.round(h.x), Math.round(h.y), h.kind]), sig: G.signals.map(s => [Math.round(s.x), Math.round(s.y)]), dim: G.dim.toFixed(4), shiftT: G.shiftT.toFixed(4), informed: (MS.CH.exp.stats.lensInformed || 0) - informed0 });
+    };
+    const off = run(false), on = run(true);
+    return { same: off === on, off: off === on ? '' : off, on: off === on ? '' : on, simCalls, cosCalls, adapterRng, adapterWrites, adapterCalls, lens: MS.G.p.lens, drawn: MS.r3Survey().length };
+  });
+  assert(r.lens === 3 && r.drawn > 0, 'setup: Survey was up and drawing: ' + JSON.stringify(r));
+  assert(r.cosCalls > 0, 'control: the 3D layer does draw from the cosmetic stream (Three.js object IDs): ' + JSON.stringify(r));
+  assert(r.simCalls === 0, 'Survey rendering never calls the simulation\'s Math.random: ' + JSON.stringify(r));
+  assert(r.adapterCalls > 1000 && r.adapterRng === 0 && r.adapterWrites === 0, 'getLensPresentation draws no random numbers and changes nothing: ' + JSON.stringify(r));
+  assert(r.same, 'the same seed gives the same simulation with Survey rendered in 3D or not');
+}, { query: '&r3d=1', seed: 23 });
+
+await scenario('survey G: 600 rendered frames with Survey up; nothing unknown is ever shown', async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineSurveyCheck(pg);
+  await pg.keyboard.press('4');
+  await gameWait(pg, 0.3);
+  await pg.evaluate(() => MS.hold(true));
+  const r = await pg.evaluate(() => {
+    const G = MS.G, bad = []; let frames = 0, drawnTotal = 0, bodies = 0;
+    const memShown = m => m === 1 ? 'open' : m === 0 ? 'closed' : 'unknown';
+    for (let i = 0; i < 600; i++) {
+      G.debugAim = Math.sin(i / 70) * 2.2; G.debugFocus = i % 300 > 240;
+      MS.update(1 / 30); MS.r3Frame(); frames++;
+      const chk = surveyCheck(); drawnTotal += chk.n;
+      if (chk.bad.length) bad.push({ i, survey: chk.bad[0] });
+      MS.r3Doors().forEach(d => {
+        const lit = G.t - G.doorSeenT[d.k] < 0.05;
+        if (!lit && d.shown !== memShown(G.mem[d.k])) bad.push({ i, k: d.k, why: 'unlit doorway shows something other than memory', d });
+        if (d.shown === 'unknown' && (d.slab || d.glow > 0)) bad.push({ i, k: d.k, why: 'unknown doorway drawn' });
+      });
+      const e = MS.r3Entities();
+      e.hollows.forEach((h, k) => { if (!h) return; if (h.body) bodies++;
+        if (h.body && !h.simVis) bad.push({ i, k, why: 'Hollow body while unlit' });
+        if (h.eyes && !h.simVis && Math.hypot(h.x - G.p.x, h.y - G.p.y) >= 260) bad.push({ i, k, why: 'eyes beyond 260 px' }); });
+      e.figs.forEach((f, k) => { if (f && k < G.signals.length && f.shown && !f.simVis) bad.push({ i, k, why: 'unlit voice shown' }); });
+      e.items.forEach((it, k) => { if (it && it.shown && !it.simVis) bad.push({ i, k, why: 'unlit item shown' }); });
+      if (G.p.lens !== 3) bad.push({ i, why: 'Survey dropped' });
+    }
+    return { frames, drawnTotal, bodies, nBad: bad.length, bad: bad.slice(0, 5) };
+  });
+  assert(r.frames === 600 && r.drawnTotal > 600, 'setup: 600 frames with Survey drawing: ' + JSON.stringify(r));
+  assert(r.nBad === 0, 'no unknown state, hidden entity or out-of-reach mark in any frame: ' + JSON.stringify(r));
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('survey H: the Survey grid carries no layout; unlit walls and pillars do not show through it', async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineSurveyCheck(pg);
+  await pg.keyboard.press('4');
+  await gameWait(pg, 0.3);
+  await pg.evaluate(() => MS.hold(true));
+  const r = await pg.evaluate(control => {
+    // a room far from the Sanctuary, lantern pressed against its north wall: most of the view is unlit
+    const G = MS.G, Z = G.Z; let best = null;
+    G.hollows.forEach(h => h.dead = true);
+    for (let k = 0; k < Z.NR; k++) { const x = ((k % Z.RW) * 9 + 5) * 32, y = (Math.floor(k / Z.RW) * 9 + 5) * 32, d = Math.hypot(x - G.sanct.x, y - G.sanct.y); if (!best || d > best.d) best = { x, y, d, k }; }
+    MS.teleport(best.x, Math.floor(best.k / Z.RW) * 288 + 54); G.debugAim = -Math.PI / 2;
+    for (let i = 0; i < 4; i++) MS.update(1 / 30);
+    if (control) { MS.R3.survey.mat.depthTest = true; MS.R3.survey.mat.needsUpdate = true; }   // the bug this guards against
+    MS.r3Read([]);
+    // screen points whose floor and surroundings (two tiles each way) are unlit: walls there are unlit too
+    const pts = [];
+    for (let sy = 20; sy < innerHeight - 20; sy += 14) for (let sx = 20; sx < innerWidth - 20; sx += 14) {
+      const w = MS.r3ScreenToWorld(sx, sy); if (!w || w.x < 0 || w.y < 0 || w.x >= Z.GW * 32 || w.y >= Z.GH * 32) continue;
+      if (Math.hypot(w.x - G.p.x, w.y - G.p.y) > 700) continue;   // inside the grid's 760 px reach
+      let m = 0; for (const dx of [-64, -32, 0, 32, 64]) for (const dy of [-64, -32, 0, 32, 64]) m = Math.max(m, MS.r3MaskAt(w.x + dx, w.y + dy) ?? 1);
+      if (m < 0.05) pts.push([sx, sy]);
+    }
+    // the grid's own contribution (grid on minus grid off) at each point, with the walls in place and with them removed:
+    // a grid that carries no layout adds the same either way (unlit wall and unlit floor differ slightly by themselves)
+    const walls = MS.R3.scene.children.filter(o => o.isInstancedMesh), grid = MS.R3.survey.grid;
+    const contrib = () => { const on = MS.r3Read(pts); grid.material.visible = false; const off = MS.r3Read(pts); grid.material.visible = true; return on.map((v, i) => v - off[i]); };
+    const withWalls = contrib();
+    walls.forEach(o => o.visible = false);
+    const noWalls = contrib();
+    walls.forEach(o => o.visible = true);
+    let worst = 0, at = null, gridSeen = 0;
+    pts.forEach((p, i) => { gridSeen = Math.max(gridSeen, noWalls[i]); const d = Math.abs(withWalls[i] - noWalls[i]); if (d > worst) { worst = d; at = { p, withWalls: withWalls[i], noWalls: noWalls[i] }; } });
+    if (control) { MS.R3.survey.mat.depthTest = false; MS.R3.survey.mat.needsUpdate = true; }
+    return { n: pts.length, worst, at, gridSeen, wallMeshes: walls.length, depthTest: MS.R3.survey.mat.depthTest, gridOn: MS.R3.survey.grid.visible };
+  }, !!process.env.SURVEY_GRID_CONTROL);
+  if (process.env.VERBOSE) console.log('      grid', JSON.stringify(r));
+  assert(r.n > 200 && r.wallMeshes > 0 && r.gridOn && r.gridSeen > 5, 'setup: many unlit screen points, and the grid is visibly drawn there: ' + JSON.stringify(r));
+  assert(r.worst <= 1, 'the grid adds the same light with walls and pillars present or removed: it shows no layout: ' + JSON.stringify(r));
+  await pg.shot('survey-H-grid-darkness');
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('survey views: lantern edge and darkness, for review', async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineSurveyCheck(pg);
+  await pg.keyboard.press('4');
+  await gameWait(pg, 0.3);
+  await pg.evaluate(() => MS.hold(true));
+  const a = await pg.evaluate(() => {
+    const G = MS.G, Z = G.Z, east = Z.dockR + 1;
+    G.hollows.forEach(h => h.dead = true);
+    MS.teleport(((east % Z.RW) * 9 + 5) * 32 - 60, (Math.floor(east / Z.RW) * 9 + 5) * 32 + 40); G.debugAim = -0.5;
+    for (let i = 0; i < 4; i++) MS.update(1 / 30);
+    MS.r3Frame(); return surveyCheck();
+  });
+  assert(a.bad.length === 0, 'lantern edge: Survey follows the 2D rule: ' + JSON.stringify(a));
+  await pg.shot('survey-02-lantern-edge');
+  const d = await pg.evaluate(() => {
+    // a room far from the Sanctuary, lantern pressed against a wall: almost nothing is lit
+    const G = MS.G, Z = G.Z;
+    let best = null;
+    for (let r = 0; r < Z.NR; r++) { const x = ((r % Z.RW) * 9 + 5) * 32, y = (Math.floor(r / Z.RW) * 9 + 5) * 32, dd = Math.hypot(x - G.sanct.x, y - G.sanct.y); if (!best || dd > best.dd) best = { x, y, dd, r }; }
+    const ry = Math.floor(best.r / Z.RW) * 9 * 32;
+    MS.teleport(best.x, ry + 32 + 22); G.debugAim = -Math.PI / 2;
+    for (let i = 0; i < 4; i++) MS.update(1 / 30);
+    MS.r3Frame(); return surveyCheck();
+  });
+  assert(d.bad.length === 0, 'darkness: Survey follows the 2D rule: ' + JSON.stringify(d));
+  await pg.shot('survey-03-darkness');
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('survey reduced motion: Survey is unchanged and still follows the 2D rule', async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineSurveyCheck(pg);
+  await pg.keyboard.press('4');
+  await gameWait(pg, 0.4);
+  await pg.evaluate(() => MS.hold(true));
+  const r = await pg.evaluate(() => { MS.r3Frame(); return { motion: MS.S.motion, lens: MS.G.p.lens, chk: surveyCheck() }; });
+  assert(r.motion === false && r.lens === 3 && r.chk.n > 0 && r.chk.bad.length === 0, 'reduced motion with Survey up: ' + JSON.stringify(r));
+  await pg.shot('survey-11-reduced-motion');
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11, reducedMotion: 'reduce' });
+
+await scenario('survey high contrast: set from Settings; Survey still follows the 2D rule', async pg => {
+  await r3ready(pg);
+  await pg.click('#btnSettings');
+  await pg.click('[data-toggle="contrast"]');
+  await pg.reload(); await pg.waitForFunction(() => window.MS && MS.state === 'title');
+  await pg.evaluate(() => MS.seed(11));
+  await r3ready(pg); await beginFirstPlace(pg); await defineSurveyCheck(pg);
+  await pg.keyboard.press('4');
+  await gameWait(pg, 0.4);
+  await pg.evaluate(() => MS.hold(true));
+  const r = await pg.evaluate(() => { MS.r3Frame(); return { hc: document.documentElement.classList.contains('hc'), contrast: MS.S.contrast, lens: MS.G.p.lens, chk: surveyCheck() }; });
+  assert(r.hc && r.contrast && r.lens === 3 && r.chk.n > 0 && r.chk.bad.length === 0, 'high contrast with Survey up: ' + JSON.stringify(r));
+  await pg.shot('survey-10-high-contrast');
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+await scenario('survey touch: on a phone, the LENS button raises Survey in 3D; controls stay clear of the lens bar', async pg => {
+  await r3ready(pg);
+  await pg.tap('#btnBegin'); await pg.tap('.rnode.avail'); await pg.tap('#goBtn');
+  await pg.waitForFunction(() => MS.state === 'zone');
+  await defineSurveyCheck(pg);
+  for (let i = 0; i < 3; i++) { await pg.tap('#tLens'); await gameWait(pg, 0.1); }
+  await gameWait(pg, 0.3);
+  await pg.evaluate(() => MS.hold(true));
+  const r = await pg.evaluate(() => {
+    MS.r3Frame();
+    return { lens: MS.G.p.lens, three: document.documentElement.classList.contains('r3d'), chk: surveyCheck(), touch: !document.getElementById('touchUi').hidden,
+      sizes: [...document.querySelectorAll('.tbtn')].map(b => { const r = b.getBoundingClientRect(); return [b.id, Math.round(r.width), Math.round(r.bottom)]; }), lensTop: innerHeight - 14 - 34 };
+  });
+  assert(r.three && r.touch && r.lens === 3, 'three taps on LENS reach Survey, in 3D, with touch controls: ' + JSON.stringify(r));
+  assert(r.chk.bad.length === 0, 'Survey follows the 2D rule on a phone: ' + JSON.stringify(r.chk));
+  for (const [id, w, bottom] of r.sizes) assert(w >= 44 && bottom < r.lensTop - 4, id + ' is large enough and clear of the lens bar');
+  await pg.shot('survey-12-phone');
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11, viewport: { width: 390, height: 844 }, touch: true });
+
 /* ---------- Milestone C: audio, captions, accessibility, persistence ---------- */
 await scenario('audio: nothing before a gesture; buses independent; mute; nodes released', async pg => {
   assert(await pg.evaluate(() => MS.audioStats()) === null, 'no AudioContext before the player interacts');
