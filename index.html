@@ -3003,6 +3003,7 @@ function renderOverlay2d() {   // the 2D canvas becomes a transparent layer for 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, cv.width, cv.height);
   if (G.p.lens === 3) drawSurvey3d(); else R3.surveyDrawn = [];
+  if (G.p.lens === 1) drawEmber3d(); else if (G.p.lens === 2) drawEcho3d(); else R3.lensDrawn = null;
   drawHud();
 }
 function r3Read(points) {   // tests: render this frame and return luminance (0-255) at CSS pixel points
@@ -3266,11 +3267,39 @@ function getLensPresentation(sim, obj, lens) {   // sim is the live simulation (
       if (h.vis) eyes = 1;
       else { const d = Math.hypot(h.x - P.x, h.y - P.y); if (d < 260 && losFromPlayer(h.x, h.y)) eyes = (1 - d / 260) * 0.85; }
     }
-    return { body, eyes, show: body || eyes > 0, provenance: body ? 'visibleNow' : 'unknown' };
+    const out = { body, eyes, show: body || eyes > 0, provenance: body ? 'visibleNow' : 'unknown' };
+    if (lens === 2) out.echo = echoHollow(sim, h);
+    return out;
   }
-  if (obj.kind === 'escort') return { show: true, provenance: 'visibleNow' };   // drawn as 2D draws it: under the dark
-  if (obj.kind === 'voice') { const v = !!obj.f.vis; return { show: v, provenance: v ? 'visibleNow' : 'unknown' }; }
-  if (obj.kind === 'item') { const v = !!obj.it.vis; return { show: v, provenance: v ? 'visibleNow' : 'unknown' }; }
+  if (obj.kind === 'escort') { const out = { show: true, provenance: 'visibleNow' }; if (lens === 2) out.echo = { provenance: 'visibleNow', x: obj.f.x, y: obj.f.y }; return out; }   // drawn as 2D draws it: under the dark
+  if (obj.kind === 'voice') {
+    const s = obj.f, v = !!s.vis, out = { show: v, provenance: v ? 'visibleNow' : 'unknown' };
+    if (lens === 2) {   // every voice pulses in Echo; its name and its clue ledger only once heard (drawEchoLens, drawSpeech)
+      const chips = [];
+      if (s.vis || s.heard) {
+        if (s.verified) chips.push(['✓ VERIFIED', '#9be3a4']);
+        if (s.clues.pulse === 'off') chips.push(['♥ OFF-BEAT', '#ffb08a']); else if (s.clues.pulse === 'in') chips.push(['♥ IN TIME', '#9be3a4']);
+        if (s.clues.moved) chips.push(['↝ MOVED', '#ffb08a']);
+      }
+      out.echo = { provenance: 'ledgerEarned', x: s.x, y: s.y, phase: sigPhase(s), label: s.heard ? s.name : 'voice', named: !!s.heard, chips };
+    }
+    return out;
+  }
+  if (obj.kind === 'item') {
+    const it = obj.it, v = !!it.vis, out = { show: v, provenance: v ? 'visibleNow' : 'unknown' };
+    if (lens === 1) out.ember = {   // heat through stone: every item, its kind and yield (drawEmberLens)
+      provenance: 'ledgerEarned', x: it.x, y: it.y, kind: it.kind,
+      col: it.kind === 'ember' ? [255, 138, 76] : it.kind === 'salvage' ? [196, 180, 140] : it.kind === 'relic' ? [169, 193, 255] : [255, 196, 107],
+      base: it.kind === 'ember' ? 6 + Math.sqrt(it.amt) * 5 : 9,
+      label: it.kind === 'ember' ? String(it.amt) : it.kind === 'salvage' ? it.amt + ' salvage' : it.kind === 'relic' ? 'relic' : 'your pack' };
+    return out;
+  }
+  if (obj.kind === 'room') {   // Ember: the ember still in each room (roomTotals)
+    if (lens !== 1) return { show: false, provenance: 'unknown' };
+    let total = 0; for (const it of sim.items) if (it.kind === 'ember' && roomAt(it.x, it.y) === obj.k) total += it.amt;
+    return { show: total > 0, provenance: total > 0 ? 'ledgerEarned' : 'unknown', total };
+  }
+  if (obj.kind === 'sanctuary') return lens === 2 ? { show: true, provenance: 'visibleNow', heartbeat: sim.t % 1 } : { show: false, provenance: 'unknown' };
   if (obj.kind === 'beacon') { const b = obj.b; return { show: !!b.lit, provenance: b.lit ? 'ledgerEarned' : 'unknown' }; }   // only beacons the Warden placed exist
   return { show: false, provenance: 'unknown' };
 }
@@ -3320,6 +3349,101 @@ function drawSurvey3d() {
     drawn.push({ k, tag: sv.tag, state: sv.state, age: sv.age, provenance: sv.provenance, sx: Math.round(c.x), sy: Math.round(c.y) });
   });
   R3.surveyDrawn = drawn;
+}
+
+/* Echo's sweep, computed rather than stored: 2D writes h.ping each frame the 1.4 s, 900 px sweep passes within
+   40 px; here the same moment is derived from the time since the lens went up, so nothing is written. */
+const ECHO_PERIOD = 1.4, ECHO_REACH = 900;
+function echoSweep(sim) { return ((sim.t - (sim.p.lensT || 0)) % ECHO_PERIOD) / ECHO_PERIOD * ECHO_REACH; }
+function echoHollow(sim, h) {
+  const P = sim.p, d = Math.hypot(h.x - P.x, h.y - P.y), since = sim.t - (P.lensT || 0), sweep = echoSweep(sim);
+  let pingAge = Infinity;
+  if (Math.abs(d - sweep) < 40) pingAge = 0;
+  else if (d - 40 < ECHO_REACH) { const leave = Math.min(1, (d + 40) / ECHO_REACH) * ECHO_PERIOD, n = Math.floor((since - leave) / ECHO_PERIOD); if (n >= 0) pingAge = since - leave - n * ECHO_PERIOD; }
+  const live = !h.frozen && h.emerge <= 0;
+  return { provenance: 'ledgerEarned', x: h.x, y: h.y, r: h.r, d, forming: h.emerge > 0, heading: live ? h.ang : null,
+    status: h.emerge > 0 ? 'FORMING' : h.kind !== 'plain' ? ADAPT[h.kind].short : h.frozen ? 'HELD' : 'MOVING',
+    alpha: clamp(1 - pingAge / 1.4, 0.18, 1), ping: pingAge === 0, arrow: live && d < 700, live };
+}
+/* Ember and Echo in 3D, drawn as 2D draws them: marks on the 2D layer over the world, at screen size, through walls,
+   from getLensPresentation only. Nothing is added to the 3D scene, so no lens mark can be hidden or shaped by walls. */
+function r3Screen(x, y) {   // CSS px for a floor point; for a point behind the camera, a far point in its direction
+  const p = r3Project(x, y, 0.02);
+  if (!p.behind) return p;
+  const tx = R3.target.x * T, ty = R3.target.z * T, a = Math.atan2(y - ty, x - tx);
+  return { x: W / 2 + Math.cos(a) * 1e4, y: H / 2 + Math.sin(a) * 1e4, behind: true };
+}
+function r3Scale(x, y) { const a = r3Project(x, y, 0), b = r3Project(x + T, y, 0); return Math.hypot(b.x - a.x, b.y - a.y) / T; }   // screen px per world px here
+function drawEmber3d() {
+  const t = S.motion ? G.t : 0, drawn = { items: [], rooms: [] };
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = 'rgba(24,8,2,0.32)'; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  G.items.forEach((it, i) => {
+    const e = getLensPresentation(G, { kind: 'item', it }, 1).ember, p = r3Screen(e.x, e.y);
+    if (p.behind || !onScreen(p.x, p.y, 60)) return;
+    for (let k = 3; k >= 1; k--) { ctx.strokeStyle = `rgba(${e.col},${0.22 * (4 - k)})`; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(p.x, p.y, e.base * k * 0.8 + Math.sin(t * 2 + k) * 1.5, 0, TAU); ctx.stroke(); }
+    ctx.fillStyle = `rgb(${e.col})`; ctx.font = `700 12px ${F.mono}`;
+    ctx.fillText(e.label, p.x, p.y - e.base * 2.6 - 4);
+    drawn.items.push({ i, kind: e.kind, label: e.label, sx: Math.round(p.x), sy: Math.round(p.y), provenance: e.provenance });
+  });
+  const Z = G.Z;
+  for (let k = 0; k < Z.NR; k++) {
+    const r = getLensPresentation(G, { kind: 'room', k }, 1);
+    if (!r.show) continue;
+    const x = ((k % Z.RW) * ROOM + 5) * T, y = (Math.floor(k / Z.RW) * ROOM + 5) * T, p = r3Screen(x, y);
+    if (p.behind || !onScreen(p.x, p.y, 40)) continue;
+    ctx.font = `600 ${Math.round(22 * r3Scale(x, y))}px ${F.disp}`;
+    ctx.fillStyle = `rgba(255,150,90,${0.2 + Math.min(0.35, r.total / 40)})`; ctx.fillText(r.total, p.x, p.y + 8);
+    drawn.rooms.push({ k, total: r.total });
+  }
+  R3.lensDrawn = drawn;
+}
+function drawEcho3d() {
+  const P = G.p, drawn = { hollows: [], arrows: [], voices: [], escorts: 0, heart: false };
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.fillStyle = 'rgba(2,18,20,0.36)'; ctx.fillRect(0, 0, W, H);
+  // the sweep: a ring on the floor around the Warden, projected; segments behind the camera are skipped
+  const sweep = echoSweep(G);
+  ctx.strokeStyle = `rgba(111,227,210,${0.5 * (1 - sweep / ECHO_REACH)})`; ctx.lineWidth = 2; ctx.beginPath();
+  let pen = false;
+  for (let i = 0; i <= 96; i++) {
+    const a = i / 96 * TAU, q = r3Project(P.x + Math.cos(a) * sweep, P.y + Math.sin(a) * sweep, 0.02);
+    if (q.behind) { pen = false; continue; }
+    if (pen) ctx.lineTo(q.x, q.y); else { ctx.moveTo(q.x, q.y); pen = true; }
+  }
+  ctx.stroke();
+  const pings = R3.echoPing || (R3.echoPing = new WeakMap());
+  G.hollows.forEach((h, i) => {
+    const e = getLensPresentation(G, { kind: 'hollow', h }, 2).echo;
+    // the answering ping is a sound (as in 2D); the renderer keeps its own last-ping time, so no simulation state is written
+    if (e.ping) { if (G.t - (pings.get(h) ?? -9) > 0.6 && e.live) emit('echoPing', { pan: clamp((h.x - P.x) / 400, -1, 1) }); pings.set(h, G.t); }
+    const p = r3Screen(e.x, e.y), col = `rgba(111,227,210,${e.alpha})`;
+    if (p.behind || !onScreen(p.x, p.y, 40)) { if (e.arrow) { edgeArrow(p.x, p.y, col); drawn.arrows.push(i); } return; }
+    const rad = e.r * r3Scale(e.x, e.y) + 5;
+    ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+    if (e.forming) ctx.setLineDash([3, 4]);
+    ctx.beginPath(); ctx.arc(p.x, p.y, rad, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+    if (e.heading != null) { const q = r3Project(e.x + Math.cos(e.heading) * 20, e.y + Math.sin(e.heading) * 20, 0.02), L = Math.hypot(q.x - p.x, q.y - p.y) || 1; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + (q.x - p.x) / L * 26, p.y + (q.y - p.y) / L * 26); ctx.stroke(); }
+    ctx.fillStyle = col; ctx.font = `600 10px ${F.mono}`; ctx.textAlign = 'center';
+    ctx.fillText(e.status, p.x, p.y - rad - 6);
+    drawn.hollows.push({ i, status: e.status, alpha: +e.alpha.toFixed(2), sx: Math.round(p.x), sy: Math.round(p.y), provenance: e.provenance });
+  });
+  const hb = getLensPresentation(G, { kind: 'sanctuary' }, 2).heartbeat, sp = r3Screen(G.sanct.x, G.sanct.y);   // the heartbeat to compare against
+  if (!sp.behind) { ctx.strokeStyle = `rgba(255,196,107,${1 - hb})`; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(sp.x, sp.y, 20 + hb * 54, 0, TAU); ctx.stroke(); drawn.heart = true; }
+  G.signals.forEach((s, i) => {
+    const e = getLensPresentation(G, { kind: 'voice', f: s }, 2).echo, p = r3Screen(e.x, e.y), ph = e.phase;
+    if (p.behind || !onScreen(p.x, p.y, 60)) { edgeArrow(p.x, p.y, `rgba(111,227,210,${0.3 + 0.7 * (1 - ph)})`, e.label); drawn.arrows.push('v' + i); return; }
+    ctx.strokeStyle = `rgba(111,227,210,${1 - ph})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, 10 + ph * 44, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = '#6fe3d2'; ctx.lineWidth = 1.5; ctx.beginPath();   // its pulse as a trace
+    for (let k = 0; k <= 24; k++) { const x = p.x - 24 + k * 2, y = p.y + 30 - Math.max(0, Math.cos((ph - k / 24) * TAU)) * 8; if (k) ctx.lineTo(x, y); else ctx.moveTo(x, y); }
+    ctx.stroke();
+    ctx.fillStyle = '#6fe3d2'; ctx.font = `600 11px ${F.body}`; ctx.textAlign = 'center'; ctx.fillText(e.label, p.x, p.y + 48);
+    if (e.chips.length && onScreen(p.x, p.y, 20)) { let y = p.y + 22 * r3Scale(e.x, e.y) + 8; for (const [txt, c] of e.chips) { chip(p.x, y, txt, c); y += 18; } }
+    drawn.voices.push({ i, label: e.label, named: e.named, chips: e.chips.map(c => c[0]), sx: Math.round(p.x), sy: Math.round(p.y) });
+  });
+  for (const f of G.escorts) { const e = getLensPresentation(G, { kind: 'escort', f }, 2).echo, p = r3Screen(e.x, e.y); if (p.behind) continue; ctx.strokeStyle = '#9be3a4'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, 15, 0, TAU); ctx.stroke(); drawn.escorts++; }
+  R3.lensDrawn = drawn;
 }
 
 /* ===================== input ===================== */
@@ -3892,8 +4016,8 @@ if (DEBUG) {
     get r3() { return R3.status; }, get r3Error() { return R3.error; },
     r3Doors() { return R3.doors ? R3.doors.map((d, k) => ({ k, shown: d.shown, label: d.label, slab: d.slab.visible, glow: d.glowMat.uniforms.uA.value, brackets: d.brackets.visible })) : null; },
     r3Project(x, y, h) { return r3Project(x, y, h); },
-    lensPresentation(o, lens) { const q = o.kind === 'door' ? { kind: 'door', k: o.k } : o.kind === 'hollow' ? { kind: 'hollow', h: G.hollows[o.i] } : o.kind === 'item' ? { kind: 'item', it: G.items[o.i] } : o.kind === 'voice' ? { kind: 'voice', f: G.signals[o.i] } : o.kind === 'escort' ? { kind: 'escort', f: G.escorts[o.i] } : { kind: 'beacon', b: G.beacons[o.i] }; return getLensPresentation(G, q, lens); },
-    r3Survey() { return R3.surveyDrawn || []; }, r3Frame() { renderZone3d(); renderOverlay2d(); },
+    lensPresentation(o, lens) { const q = o.kind === 'door' ? { kind: 'door', k: o.k } : o.kind === 'hollow' ? { kind: 'hollow', h: G.hollows[o.i] } : o.kind === 'item' ? { kind: 'item', it: G.items[o.i] } : o.kind === 'voice' ? { kind: 'voice', f: G.signals[o.i] } : o.kind === 'escort' ? { kind: 'escort', f: G.escorts[o.i] } : o.kind === 'room' ? { kind: 'room', k: o.k } : o.kind === 'sanctuary' ? { kind: 'sanctuary' } : { kind: 'beacon', b: G.beacons[o.i] }; return getLensPresentation(G, q, lens); },
+    r3Survey() { return R3.surveyDrawn || []; }, r3Lens() { return R3.lensDrawn || null; }, r3Frame() { renderZone3d(); renderOverlay2d(); },
     r3Read(points) { return r3Read(points); }, r3Entities() { return r3Entities(); }, r3ScreenToWorld(x, y) { return r3ScreenToWorld(x, y); }, r3FloorVisible(x, y, strict) { return r3FloorVisible(x, y, strict); }, r3MaskAt(x, y) { const M = R3.mask; if (!M) return null; const d = M.g.getImageData(Math.floor(x / T * M.px), Math.floor(y / T * M.px), 1, 1).data; return d[0] / 255; }
   };
 }

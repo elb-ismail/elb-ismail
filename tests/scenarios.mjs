@@ -1106,6 +1106,335 @@ await scenario('survey touch: on a phone, the LENS button raises Survey in 3D; c
   noThreeWarnings(pg);
 }, { query: '&r3d=1', seed: 11, viewport: { width: 390, height: 844 }, touch: true });
 
+/* ---------- Step 5B: the Ember and Echo lenses in 3D ---------- */
+// What 3D drew (after MS.r3Frame) against the 2D rule computed from raw state (drawEmberLens, drawEchoLens).
+const defineLensCheck = pg => pg.evaluate(() => {
+  const onS = (p, m) => !p.behind && p.x > -m && p.y > -m && p.x < innerWidth + m && p.y < innerHeight + m;
+  window.emberCheck = () => {
+    const G = MS.G, Z = G.Z, d = MS.r3Lens(), bad = [];
+    if (!d || !d.items) return { bad: ['nothing drawn'], n: 0 };
+    const got = new Map(d.items.map(x => [x.i, x]));
+    G.items.forEach((it, i) => {
+      const want = onS(MS.r3Project(it.x, it.y, 0.02), 60), g = got.get(i);
+      const label = it.kind === 'ember' ? String(it.amt) : it.kind === 'salvage' ? it.amt + ' salvage' : it.kind === 'relic' ? 'relic' : 'your pack';
+      if (want !== !!g) bad.push({ i, want, got: !!g });
+      else if (g && (g.label !== label || g.provenance !== 'ledgerEarned')) bad.push({ i, label, g });
+    });
+    const tot = new Array(Z.NR).fill(0); for (const it of G.items) if (it.kind === 'ember') tot[Math.floor(it.y / 288) * Z.RW + Math.floor(it.x / 288)] += it.amt;
+    const rooms = new Map(d.rooms.map(r => [r.k, r.total]));
+    for (let k = 0; k < Z.NR; k++) {
+      const p = MS.r3Project(((k % Z.RW) * 9 + 5) * 32, (Math.floor(k / Z.RW) * 9 + 5) * 32, 0.02), want = tot[k] > 0 && onS(p, 40);
+      if (want !== rooms.has(k) || (want && rooms.get(k) !== tot[k])) bad.push({ room: k, want: tot[k], got: rooms.get(k) });
+    }
+    return { n: d.items.length, rooms: d.rooms.length, bad };
+  };
+  window.echoCheck = () => {
+    const G = MS.G, P = G.p, d = MS.r3Lens(), bad = [];
+    if (!d || !d.hollows) return { bad: ['nothing drawn'], n: 0 };
+    const got = new Map(d.hollows.map(x => [x.i, x])), arrows = new Set(d.arrows);
+    G.hollows.forEach((h, i) => {
+      const on = onS(MS.r3Project(h.x, h.y, 0.02), 40), live = !h.frozen && h.emerge <= 0, g = got.get(i);
+      const status = h.emerge > 0 ? 'FORMING' : h.kind !== 'plain' ? h.kind.toUpperCase() : h.frozen ? 'HELD' : 'MOVING';
+      if (on !== !!g) bad.push({ i, on, got: !!g });
+      else if (g && (g.status !== status || g.provenance !== 'ledgerEarned')) bad.push({ i, status, g });
+      if (!on && arrows.has(i) !== (live && Math.hypot(h.x - P.x, h.y - P.y) < 700)) bad.push({ i, arrow: arrows.has(i) });
+    });
+    const vs = new Map(d.voices.map(x => [x.i, x]));
+    G.signals.forEach((s, i) => {
+      const on = onS(MS.r3Project(s.x, s.y, 0.02), 60), g = vs.get(i);
+      if (on !== !!g || (!on && !arrows.has('v' + i))) { bad.push({ voice: i, on, got: !!g }); return; }
+      if (!g) return;
+      const chips = [];
+      if (s.vis || s.heard) { if (s.verified) chips.push('✓ VERIFIED'); if (s.clues.pulse === 'off') chips.push('♥ OFF-BEAT'); else if (s.clues.pulse === 'in') chips.push('♥ IN TIME'); if (s.clues.moved) chips.push('↝ MOVED'); }
+      if (g.label !== (s.heard ? s.name : 'voice') || g.chips.join() !== chips.join()) bad.push({ voice: i, heard: s.heard, g, chips });
+    });
+    return { n: d.hollows.length + d.voices.length + d.arrows.length + d.escorts + (d.heart ? 1 : 0), voices: d.voices.length, bad };   // n: every Echo mark
+  };
+});
+
+const lensNormal = (name, key, lens, check, shot) => scenario(`${name} A: normal input raises the lens, crosses into the next room with it up, and lowers it`, async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineLensCheck(pg);
+  await pg.mouse.move(1080, 350);
+  await pg.keyboard.press(key);
+  await gameWait(pg, 0.4);
+  await pg.evaluate(() => MS.hold(true));
+  const a = await pg.evaluate(c => { MS.r3Frame(); return { lens: MS.G.p.lens, chk: window[c](), room: MS.R3.room }; }, check);
+  assert(a.lens === lens && a.chk.n > 0 && a.chk.bad.length === 0, `key ${key} raises the lens and it follows the 2D rule: ` + JSON.stringify(a));
+  await pg.shot(shot + '-01-full-light');
+  await pg.evaluate(() => MS.hold(false));
+  await pg.keyboard.down('d');
+  try { await pg.waitForFunction(r0 => MS.R3.room !== r0, a.room, { timeout: 30000 }); } finally { await pg.keyboard.up('d'); }
+  await gameWait(pg, 0.2);
+  await pg.evaluate(() => MS.hold(true));
+  const b = await pg.evaluate(c => { MS.r3Frame(); const G = MS.G, P = G.p, Z = G.Z; return { lens: P.lens, room: MS.R3.room, simRoom: Math.floor(P.y / 288) * Z.RW + Math.floor(P.x / 288), chk: window[c]() }; }, check);
+  assert(b.lens === lens && b.room !== a.room && b.room === b.simRoom && b.chk.bad.length === 0, 'the lens stays up and correct across the camera move: ' + JSON.stringify(b));
+  await pg.evaluate(() => MS.hold(false));
+  await pg.keyboard.press(key);
+  await gameWait(pg, 0.2);
+  await pg.evaluate(() => MS.hold(true));
+  const c = await pg.evaluate(() => { MS.r3Frame(); return { lens: MS.G.p.lens, drawn: MS.r3Lens() }; });
+  assert(c.lens === 0 && c.drawn === null, `key ${key} again lowers it and its marks go: ` + JSON.stringify(c));
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+await lensNormal('ember', '2', 1, 'emberCheck', 'ember');
+await lensNormal('echo', '3', 2, 'echoCheck', 'echo');
+
+// Hidden entities and world layout with a lens up: WebGL readback at the entity equals bare floor, the 2D layer is
+// unchanged by things the lens may not show, and neither layer changes when walls and pillars are removed.
+// Each check runs a control that does the forbidden thing and must be detected.
+const lensLeak = (name, key, lens, shot) => scenario(`${name} B: hidden entities and layout give no signal with the lens up (with failing controls)`, async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineLensCheck(pg);
+  await pg.keyboard.press(key);
+  await gameWait(pg, 0.4);
+  await pg.evaluate(() => MS.hold(true));
+  const r = await pg.evaluate(lens => {
+    const G = MS.G, Z = G.Z, east = Z.dockR + 1, P = G.p, cv = document.getElementById('game'), c2 = cv.getContext('2d'), dpr = cv.width / innerWidth;
+    const over = (pts, n = 40) => pts.map(([x, y]) => Array.from(c2.getImageData(Math.round(x * dpr) - n, Math.round(y * dpr) - n, 2 * n + 1, 2 * n + 1).data).join(','));
+    const rc = { x: ((east % Z.RW) * 9 + 5) * 32, y: (Math.floor(east / Z.RW) * 9 + 5) * 32 };
+    MS.teleport(rc.x, rc.y - 96); G.debugAim = -Math.PI / 2;
+    const hol = G.hollows[0], mimic = G.signals.find(s => !s.real), item = G.items.find(i => i.kind === 'salvage') || G.items[0];
+    G.hollows.slice(1).forEach(h => h.dead = true);
+    const ents = [['hollow', hol, 0.15], ['mimic', mimic, 0.35], ['item', item, 0.08]];
+    MS.update(0.001); MS.r3Frame();
+    const pk = [];
+    for (let i = 0; i < Z.GW * Z.GH && pk.length < 3; i++) { const x = (i % Z.GW + 0.5) * 32, y = (Math.floor(i / Z.GW) + 0.5) * 32, p = MS.r3Project(x, y, 0); if (!Z.wall[i] && (p.x < -300 || p.y < -300 || p.x > innerWidth + 300 || p.y > innerHeight + 300) && !pk.some(q => Math.hypot(q.x - x, q.y - y) < 64)) pk.push({ x, y }); }
+    const park = () => { ents.forEach(([, e], i) => { e.x = pk[i].x; e.y = pk[i].y; }); hol.emerge = 0; MS.update(0.001); ents.forEach(([, e], i) => { e.x = pk[i].x; e.y = pk[i].y; }); };
+    park(); MS.r3Frame();
+    const t0 = G.t;   // every read below is at this same instant, so the sweep, pulses and heat rings stand still
+    // dark spots: the whole neighbourhood unlit, nothing at all in front of the floor, beyond eye range or walled off
+    const wallOn = (x1, y1) => { for (let s = 0; s <= 1; s += 1 / 64) { const x = P.x + (x1 - P.x) * s, y = P.y + (y1 - P.y) * s; if (Z.wall[Math.floor(x / 32) + Math.floor(y / 32) * Z.GW]) return true; } return false; };
+    const spots = [], cand = [];
+    for (let ty = 0; ty < Z.GH; ty++) for (let tx = 0; tx < Z.GW; tx++) {
+      if (Z.wall[tx + ty * Z.GW]) continue;
+      const x = (tx + 0.5) * 32, y = (ty + 0.5) * 32, p = MS.r3Project(x, y, 0);
+      if (p.behind || p.x < 70 || p.x > innerWidth - 70 || p.y < 70 || p.y > innerHeight - 70) continue;   // WebGL is not under the HUD; the 2D layer is compared at the same pixels
+      let m = 0; for (const dx of [-40, 0, 40]) for (const dy of [-40, 0, 40]) m = Math.max(m, MS.r3MaskAt(x + dx, y + dy));
+      if (m > 0.05 || !MS.r3FloorVisible(x, y, true).visible) continue;
+      cand.push({ x, y, p, walled: wallOn(x, y), noEyes: Math.hypot(x - P.x, y - P.y) > 270 || wallOn(x, y) });
+    }
+    // the Hollow's spot out of eye range (eyes in the dark are allowed there); all three far apart on screen, so one
+    // entity's marks miss the others' pixels
+    const first = cand.find(c => c.noEyes); if (first) spots.push(first);
+    for (const c of cand) if (spots.length < 3 && !spots.some(s => Math.hypot(s.p.x - c.p.x, s.p.y - c.p.y) < 130)) spots.push(c);
+    if (spots.length < 3) return { spots: spots.length, cand: cand.length };
+    const pts = ents.map(([, , h], i) => { const p = MS.r3Project(spots[i].x, spots[i].y, h); return [p.x, p.y]; });
+    G.t = t0; const floorGL = MS.r3Read(pts); MS.r3Frame(); const floorO = over(pts);
+    const place = () => { ents.forEach(([, e], i) => { e.x = spots[i].x; e.y = spots[i].y; }); hol.emerge = 0; MS.update(0.001); ents.forEach(([, e], i) => { e.x = spots[i].x; e.y = spots[i].y; }); G.t = t0; };
+    place();
+    const vis = ents.map(([, e]) => !!e.vis);
+    const darkGL = MS.r3Read(pts); MS.r3Frame(); const darkO = over(pts);
+    const drawn = MS.r3Lens();
+    // controls: (1) the forbidden 3D leak, each hidden mesh forced visible, must change its pixel;
+    // (2) the forbidden overlay leak, the other lens's marks for these entities, must change the 2D layer
+    const E = MS.R3.E, objs = [E.hollows.get(hol).bodyG, E.figs.get(mimic).g, E.items.get(item).g];
+    // a leaking lens would draw the hidden entity highlighted, past the light mask: show each mesh with an unmasked colour
+    const swaps = [], hi = new MS.R3.T.MeshBasicMaterial({ color: 0x6fe3d2 });
+    objs.forEach(o => { o.visible = true; o.traverse(m => { if (m.isMesh) { swaps.push([m, m.material]); m.material = hi; } }); });
+    MS.R3.renderer.render(MS.R3.scene, MS.R3.camera);
+    const gl = MS.R3.renderer.getContext(), cvs = MS.R3.canvas, sx = cvs.width / innerWidth, sy = cvs.height / innerHeight, px = new Uint8Array(36);
+    const leakGL = pts.map(([x, y]) => { gl.readPixels(Math.round(x * sx) - 1, cvs.height - Math.round(y * sy) - 2, 3, 3, gl.RGBA, gl.UNSIGNED_BYTE, px); let s = 0; for (let i = 0; i < 36; i += 4) s += (px[i] + px[i + 1] + px[i + 2]) / 3; return s / 9; });
+    swaps.forEach(([m, mat]) => m.material = mat); objs.forEach(o => o.visible = false);
+    const keep = P.lens; P.lens = lens === 1 ? 2 : 1; MS.r3Frame(); const otherO = over(pts); P.lens = keep; MS.r3Frame();
+    // layout: with walls and pillars removed, the 2D layer reads the same, and the lens adds nothing to the 3D layer
+    const walls = MS.R3.scene.children.filter(o => o.isInstancedMesh);
+    const all = []; for (let y = 30; y < innerHeight - 30; y += 37) for (let x = 30; x < innerWidth - 30; x += 37) all.push([x, y]);
+    MS.r3Frame(); const oWalls = over(all, 1);
+    walls.forEach(o => o.visible = false); MS.r3Frame(); const oNoWalls = over(all, 1); walls.forEach(o => o.visible = true);
+    // in unlit regions only: the lantern cone's size follows the lens-shrunk reach, which is the lantern, not a lens mark
+    const darkPts = all.filter(([x, y]) => { const w = MS.r3ScreenToWorld(x, y); if (!w) return false; let m = 0; for (const dx of [-64, 0, 64]) for (const dy of [-64, 0, 64]) m = Math.max(m, MS.r3MaskAt(w.x + dx, w.y + dy) ?? 1); return m < 0.05; });
+    const glLens = MS.r3Read(darkPts); P.lens = 0; const glNoLens = MS.r3Read(darkPts); P.lens = keep; MS.r3Frame();
+    let glDiff = 0; darkPts.forEach((p, i) => glDiff = Math.max(glDiff, Math.abs(glLens[i] - glNoLens[i])));
+    return { lens: P.lens, vis, walled: spots.map(s => s.walled), drawn,
+      rows: ents.map(([n], i) => ({ n, floor: +floorGL[i].toFixed(1), dark: +darkGL[i].toFixed(1), leak: +leakGL[i].toFixed(1), overlaySame: floorO[i] === darkO[i], otherLensDiffers: otherO[i] !== darkO[i] })),
+      layoutSame: oWalls.every((v, i) => v === oNoWalls[i]), layoutN: all.length, glDiff, glN: darkPts.length };
+  }, lens);
+  assert(r.rows, 'setup: enough far-apart dark spots on screen: ' + JSON.stringify(r));
+  if (process.env.VERBOSE) console.log('      ' + name, JSON.stringify(r.rows), 'glDiff', r.glDiff);
+  assert(r.lens === lens && !r.vis.some(Boolean), 'setup: the lens is up and the simulation counts every entity unlit: ' + JSON.stringify(r.vis));
+  for (const row of r.rows) {
+    assert(row.dark < 12 && Math.abs(row.dark - row.floor) <= 2, `unlit ${row.n}: WebGL reads bare floor: ` + JSON.stringify(row));
+    assert(row.leak > row.dark + 12, `control: drawing the hidden ${row.n} highlighted is detected: ` + JSON.stringify(row));
+  }
+  // what each lens may show of these hidden entities, by the 2D rule: Ember marks items only; Echo marks Hollows and voices only
+  const allowed = lens === 1 ? ['item'] : ['hollow', 'mimic'];
+  for (const row of r.rows) {
+    if (allowed.includes(row.n)) assert(!row.overlaySame, `${row.n}: the lens marks it, as 2D does: ` + JSON.stringify(row));
+    else {
+      assert(row.overlaySame, `${row.n}: the lens adds nothing for it on the 2D layer: ` + JSON.stringify(row));
+      assert(row.otherLensDiffers, `control: the other lens's mark for the ${row.n} would be detected here: ` + JSON.stringify(row));
+    }
+  }
+  assert(r.layoutSame, 'the 2D layer is identical with walls and pillars removed: the lens draws no layout');
+  assert(r.glN > 50 && r.glDiff <= 1, 'in the dark, the lens adds nothing to the 3D layer (max difference ' + r.glDiff + ' over ' + r.glN + ' points)');
+  await pg.shot(shot + '-04-behind-wall');
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+await lensLeak('ember', '2', 1, 'ember');
+await lensLeak('echo', '3', 2, 'echo');
+
+await scenario('echo C: voices: never heard shows only "voice"; a drifted mimic shows where it is now, with no clue it has not earned', async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineLensCheck(pg);
+  await pg.keyboard.press('3');
+  await gameWait(pg, 0.3);
+  await pg.evaluate(() => MS.hold(true));
+  const r = await pg.evaluate(() => {
+    const G = MS.G, P = G.p, mimic = G.signals.find(s => !s.real), real = G.signals.find(s => s.real);
+    G.hollows.forEach(h => h.dead = true); MS.update(0.001);
+    const at = s => { MS.r3Frame(); const k = G.signals.indexOf(s), v = MS.r3Lens().voices.find(x => x.i === k); return { v, pres: MS.lensPresentation({ kind: 'voice', i: k }, 2).echo, chk: echoCheck() }; };
+    // never heard, unlit: the pulse only, no name, no clues
+    Object.assign(mimic, { heard: false, vis: false, verified: false, clues: { pulse: null, moved: false } });
+    mimic.x = P.x + 90; mimic.y = P.y + 40;
+    const unheard = at(mimic);
+    // it drifts while unseen: Echo follows its current pulse; the MOVED clue is not shown until the ledger has it
+    mimic.x += 60; mimic.y += 30;
+    const drifted = at(mimic);
+    // heard, with the clues the ledger holds: name and those chips
+    Object.assign(mimic, { heard: true, clues: { pulse: 'off', moved: true } });
+    const heard = at(mimic);
+    return { unheard, drifted, heard, pos: [mimic.x, mimic.y], name: mimic.name, realChk: at(real).chk };
+  });
+  assert(r.unheard.v && r.unheard.v.label === 'voice' && !r.unheard.v.named && r.unheard.v.chips.length === 0 && r.unheard.pres.provenance === 'ledgerEarned', 'never heard: a pulse labelled "voice", no name, no clues: ' + JSON.stringify(r.unheard));
+  assert(r.drifted.v && r.drifted.v.chips.length === 0 && r.drifted.chk.bad.length === 0, 'drifted unseen: current pulse, still no clue: ' + JSON.stringify(r.drifted));
+  assert(r.heard.v.label === r.name && r.heard.v.chips.join() === '♥ OFF-BEAT,↝ MOVED', 'heard: its name and the clues in its ledger: ' + JSON.stringify(r.heard));
+  for (const x of [r.unheard, r.drifted, r.heard]) assert(x.chk.bad.length === 0, 'Echo matches the 2D rule: ' + JSON.stringify(x.chk));
+  await pg.shot('echo-voices');
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+const lensStable = (name, key, lens, check) => scenario(`${name} G: 600 rendered frames with the lens up; nothing hidden is ever drawn`, async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineLensCheck(pg);
+  await pg.keyboard.press(key);
+  await gameWait(pg, 0.3);
+  await pg.evaluate(() => MS.hold(true));
+  const r = await pg.evaluate(([c, lens]) => {
+    const G = MS.G, bad = []; let frames = 0, marks = 0;
+    for (let i = 0; i < 600; i++) {
+      G.debugAim = Math.sin(i / 70) * 2.2; G.debugFocus = i % 300 > 240;
+      MS.update(1 / 30); MS.r3Frame(); frames++;
+      const chk = window[c](); marks += chk.n;
+      if (chk.bad.length) bad.push({ i, lens: chk.bad[0] });
+      const e = MS.r3Entities();
+      e.hollows.forEach((h, k) => { if (h && h.body && !h.simVis) bad.push({ i, k, why: 'Hollow body while unlit' }); if (h && h.eyes && !h.simVis && Math.hypot(h.x - G.p.x, h.y - G.p.y) >= 260) bad.push({ i, k, why: 'eyes beyond 260 px' }); });
+      e.figs.forEach((f, k) => { if (f && k < G.signals.length && f.shown && !f.simVis) bad.push({ i, k, why: 'unlit voice shown' }); });
+      e.items.forEach((it, k) => { if (it && it.shown && !it.simVis) bad.push({ i, k, why: 'unlit item shown' }); });
+      if (G.p.lens !== lens) bad.push({ i, why: 'lens dropped' });
+    }
+    return { frames, marks, nBad: bad.length, bad: bad.slice(0, 5) };
+  }, [check, lens]);
+  assert(r.frames === 600 && r.marks > 0, 'setup: 600 frames with lens marks: ' + JSON.stringify(r));
+  assert(r.nBad === 0, 'in every frame the lens follows the 2D rule and no hidden mesh is shown: ' + JSON.stringify(r));
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+await lensStable('ember', '2', 1, 'emberCheck');
+await lensStable('echo', '3', 2, 'echoCheck');
+
+await scenario('ember+echo F: lens rendering never calls Math.random, the adapter is pure, and the simulation is unchanged', async pg => {
+  await r3ready(pg); await beginFirstPlace(pg);
+  const r = await pg.evaluate(() => {
+    const id = MS.G.node.id;
+    let simCalls = 0, cosCalls = 0, adapterRng = 0, adapterWrites = 0, adapterCalls = 0, drawnE = 0, drawnH = 0;
+    const fp = G => JSON.stringify({ t: G.t, seen: G.doorSeenT, mem: G.mem, p: [G.p.x, G.p.y, G.p.lens, G.p.lensT, G.p.aim], h: G.hollows.map(h => [h.x, h.y, h.vis, h.emerge, h.ping]), s: G.signals.map(s => [s.x, s.y, s.vis, s.heard, s.seenEchoT]), it: G.items.map(i => [i.x, i.y, i.vis, i.amt]) });
+    const run = render => {
+      MS.seed(77); MS.enterZone(id);
+      const G = MS.G, Z = G.Z, east = Z.dockR + 1; G.debugAim = 0.6;
+      MS.teleport(((east % Z.RW) * 9 + 5) * 32, (Math.floor(east / Z.RW) * 9 + 5) * 32);
+      for (let i = 0; i < 900; i++) {
+        G.p.lens = i < 450 ? 1 : 2; if (i === 450) G.p.lensT = G.t;   // Ember, then Echo (setup: the same in both runs)
+        MS.update(1 / 30);
+        if (i % 120 === 60) MS.emit('flareBurst', { f: { x: G.p.x, y: G.p.y }, result: {} });
+        if (!render) continue;
+        const mr = Math.random, cr = MS.rng.cosmetic;
+        Math.random = () => { simCalls++; return mr(); };
+        MS.rng.cosmetic = () => { cosCalls++; return cr(); };
+        try { MS.r3Frame(); } finally { Math.random = mr; MS.rng.cosmetic = cr; }
+        const d = MS.r3Lens(); if (d && d.items) drawnE += d.items.length; if (d && d.hollows) drawnH += d.hollows.length + d.voices.length;
+        if (i % 30 === 0) {
+          const before = fp(G), saved = [Math.random, MS.rng.audio, MS.rng.visual, MS.rng.cosmetic], bump = f => () => { adapterRng++; return f(); };
+          Math.random = bump(saved[0]); MS.rng.audio = bump(saved[1]); MS.rng.visual = bump(saved[2]); MS.rng.cosmetic = bump(saved[3]);
+          try {
+            for (let lens = 0; lens < 4; lens++) {
+              G.hollows.forEach((h, j) => { MS.lensPresentation({ kind: 'hollow', i: j }, lens); adapterCalls++; });
+              G.signals.forEach((s, j) => { MS.lensPresentation({ kind: 'voice', i: j }, lens); adapterCalls++; });
+              G.escorts.forEach((s, j) => { MS.lensPresentation({ kind: 'escort', i: j }, lens); adapterCalls++; });
+              G.items.forEach((s, j) => { MS.lensPresentation({ kind: 'item', i: j }, lens); adapterCalls++; });
+              for (let k = 0; k < Z.NR; k++) { MS.lensPresentation({ kind: 'room', k }, lens); adapterCalls++; }
+              MS.lensPresentation({ kind: 'sanctuary' }, lens); adapterCalls++;
+            }
+          } finally { [Math.random, MS.rng.audio, MS.rng.visual, MS.rng.cosmetic] = saved; }
+          if (fp(G) !== before) adapterWrites++;
+        }
+      }
+      return JSON.stringify({ doors: G.Z.edges.map(e => e.open ? 1 : 0).join(''), mem: G.mem.join(','), hollows: G.hollows.map(h => [Math.round(h.x), Math.round(h.y), h.kind, h.ping ?? null]), sig: G.signals.map(s => [Math.round(s.x), Math.round(s.y), s.heard, +s.seenEchoT.toFixed(3), s.clues.pulse]), dim: G.dim.toFixed(4), shiftT: G.shiftT.toFixed(4) });
+    };
+    const off = run(false), on = run(true);
+    return { same: off === on, off: off === on ? '' : off, on: off === on ? '' : on, simCalls, cosCalls, adapterRng, adapterWrites, adapterCalls, drawnE, drawnH };
+  });
+  assert(r.drawnE > 0 && r.drawnH > 0, 'setup: both lenses drew marks: ' + JSON.stringify(r));
+  assert(r.cosCalls > 0, 'control: the 3D layer does draw from the cosmetic stream: ' + JSON.stringify(r));
+  assert(r.simCalls === 0, 'Ember and Echo rendering never call the simulation\'s Math.random: ' + JSON.stringify(r));
+  assert(r.adapterCalls > 1000 && r.adapterRng === 0 && r.adapterWrites === 0, 'getLensPresentation draws no random numbers and changes nothing: ' + JSON.stringify(r));
+  assert(r.same, 'the same seed gives the same simulation (including Hollow ping state) with the lenses rendered in 3D or not: ' + JSON.stringify(r));
+}, { query: '&r3d=1', seed: 23 });
+
+await scenario('ember+echo views: lantern edge and darkness, for review', async pg => {
+  await r3ready(pg); await beginFirstPlace(pg); await defineLensCheck(pg);
+  await pg.evaluate(() => MS.hold(true));
+  const place = which => pg.evaluate(which => {
+    const G = MS.G, Z = G.Z, east = Z.dockR + 1;
+    G.hollows.forEach((h, i) => { if (i) h.dead = true; });
+    if (which === 'edge') { MS.teleport(((east % Z.RW) * 9 + 5) * 32 - 60, (Math.floor(east / Z.RW) * 9 + 5) * 32 + 40); G.debugAim = -0.5; }
+    else { let best = null; for (let r = 0; r < Z.NR; r++) { const x = ((r % Z.RW) * 9 + 5) * 32, y = (Math.floor(r / Z.RW) * 9 + 5) * 32, dd = Math.hypot(x - G.sanct.x, y - G.sanct.y); if (!best || dd > best.dd) best = { x, y, dd, r }; } MS.teleport(best.x, Math.floor(best.r / Z.RW) * 288 + 54); G.debugAim = -Math.PI / 2; }
+    for (let i = 0; i < 4; i++) MS.update(1 / 30);
+  }, which);
+  const look = async (lens, check, file) => {
+    const r = await pg.evaluate(([lens, c]) => { MS.G.p.lens = lens; MS.G.p.lensT = MS.G.t - 0.5; MS.r3Frame(); return window[c](); }, [lens, check]);
+    assert(r.bad.length === 0, file + ': follows the 2D rule: ' + JSON.stringify(r));
+    await pg.shot(file);
+  };
+  await place('edge'); await look(1, 'emberCheck', 'ember-02-lantern-edge'); await look(2, 'echoCheck', 'echo-02-lantern-edge');
+  await place('dark'); await look(1, 'emberCheck', 'ember-03-darkness'); await look(2, 'echoCheck', 'echo-03-darkness');
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11 });
+
+for (const [label, opts, prep] of [
+  ['reduced motion', { reducedMotion: 'reduce' }, null],
+  ['high contrast', {}, async pg => { await pg.click('#btnSettings'); await pg.click('[data-toggle="contrast"]'); await pg.reload(); await pg.waitForFunction(() => window.MS && MS.state === 'title'); await pg.evaluate(() => MS.seed(11)); }],
+]) {
+  await scenario(`ember+echo ${label}: both lenses still follow the 2D rule`, async pg => {
+    await r3ready(pg); if (prep) { await prep(pg); await r3ready(pg); }
+    await beginFirstPlace(pg); await defineLensCheck(pg);
+    const tag = label === 'reduced motion' ? '11-reduced-motion' : '10-high-contrast';
+    for (const [key, lens, check, file] of [['2', 1, 'emberCheck', 'ember'], ['3', 2, 'echoCheck', 'echo']]) {
+      await pg.evaluate(() => MS.hold(false));
+      await pg.keyboard.press(key); await gameWait(pg, 0.4);
+      await pg.evaluate(() => MS.hold(true));
+      const r = await pg.evaluate(([lens, c]) => { MS.r3Frame(); return { lens: MS.G.p.lens, motion: MS.S.motion, hc: document.documentElement.classList.contains('hc'), chk: window[c]() }; }, [lens, check]);
+      assert(r.lens === lens && r.chk.bad.length === 0 && (label === 'reduced motion' ? r.motion === false : r.hc), `${file} with ${label}: ` + JSON.stringify(r));
+      await pg.shot(`${file}-${tag}`);
+    }
+    noThreeWarnings(pg);
+  }, Object.assign({ query: '&r3d=1', seed: 11 }, opts));
+}
+
+await scenario('ember+echo touch: on a phone, the LENS button reaches Ember then Echo in 3D', async pg => {
+  await r3ready(pg);
+  await pg.tap('#btnBegin'); await pg.tap('.rnode.avail'); await pg.tap('#goBtn');
+  await pg.waitForFunction(() => MS.state === 'zone');
+  await defineLensCheck(pg);
+  for (const [lens, check, file] of [[1, 'emberCheck', 'ember'], [2, 'echoCheck', 'echo']]) {
+    await pg.evaluate(() => MS.hold(false));
+    await pg.tap('#tLens'); await gameWait(pg, 0.3);
+    await pg.evaluate(() => MS.hold(true));
+    const r = await pg.evaluate(([lens, c]) => { MS.r3Frame(); return { lens: MS.G.p.lens, three: document.documentElement.classList.contains('r3d'), chk: window[c]() }; }, [lens, check]);
+    assert(r.three && r.lens === lens && r.chk.bad.length === 0, `LENS tap reaches ${file} and it follows the 2D rule: ` + JSON.stringify(r));
+    await pg.shot(`${file}-12-phone`);
+  }
+  noThreeWarnings(pg);
+}, { query: '&r3d=1', seed: 11, viewport: { width: 390, height: 844 }, touch: true });
+
 /* ---------- Milestone C: audio, captions, accessibility, persistence ---------- */
 await scenario('audio: nothing before a gesture; buses independent; mute; nodes released', async pg => {
   assert(await pg.evaluate(() => MS.audioStats()) === null, 'no AudioContext before the player interacts');
